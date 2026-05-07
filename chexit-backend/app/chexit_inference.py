@@ -24,6 +24,8 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # less TF stderr noise on CPU servers
 
 import tensorflow as tf
+from app.explainability.densenet_fast_scorecam import compute_densenet_fast_scorecam
+from app.explainability.fast_scorecam import compute_fast_scorecam
 
 try:
     tf.config.set_visible_devices([], "GPU")
@@ -612,20 +614,19 @@ def compute_scorecam(
     penultimate_layer: Optional[Union[str, tf.keras.layers.Layer]] = None,
     target_class: int,
     batch_size: int = 32,
+    max_channels: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, float]]:
     t0 = time.perf_counter()
     timings: Dict[str, float] = {}
     feat_layer = get_target_conv_layer(model, penultimate_layer)
-    # Keras 3 can report disconnected graphs when using nested-model `.output` tensors directly.
-    # If the target layer is a nested model (e.g., MobileNetV3 backbone), call it on `model.input`
-    # to obtain a tensor guaranteed to be connected to the outer model graph.
-    if isinstance(feat_layer, tf.keras.Model):
-        feat_tensor = feat_layer(model.input, training=False)
-    else:
-        feat_tensor = feat_layer.output
-    feat_model = tf.keras.Model(model.input, feat_tensor, name="scorecam_features")
     t_act0 = time.perf_counter()
-    acts = feat_model.predict(seed_input, verbose=0)
+    # Keras 3 nested models can expose disconnected graph/input attributes.
+    # For nested backbones, run the layer directly on the actual tensor input.
+    if isinstance(feat_layer, tf.keras.Model):
+        acts = feat_layer(tf.convert_to_tensor(seed_input), training=False).numpy()
+    else:
+        feat_model = tf.keras.Model(model.input, feat_layer.output, name="scorecam_features")
+        acts = feat_model.predict(seed_input, verbose=0)
     timings["extract_activations"] = time.perf_counter() - t_act0
     if acts.ndim != 4:
         raise ValueError(f"Expected 4D activations, got {acts.shape}")
@@ -638,21 +639,29 @@ def compute_scorecam(
         ups[c] = cv2.resize(acts_ch[c], (W, H), interpolation=cv2.INTER_LINEAR)
     timings["upsample_maps"] = time.perf_counter() - t_up0
     masks = _normalize_minmax_hw(ups)
+    selected_masks = masks
+    if max_channels is not None and max_channels > 0 and int(max_channels) < n_ch:
+        variances = np.var(masks, axis=(1, 2))
+        top_idx = np.argsort(-variances)[: int(max_channels)]
+        selected_masks = masks[top_idx]
+    timings["channels_total"] = float(n_ch)
+    timings["channels_used"] = float(selected_masks.shape[0])
     x0 = seed_input.astype(np.float32)
     weights: List[float] = []
     t_mask_fwd0 = time.perf_counter()
-    for start in range(0, n_ch, batch_size):
-        end = min(start + batch_size, n_ch)
+    n_sel = int(selected_masks.shape[0])
+    for start in range(0, n_sel, batch_size):
+        end = min(start + batch_size, n_sel)
         bsz = end - start
         batch = np.empty((bsz, H, W, 3), dtype=np.float32)
-        for j, c in enumerate(range(start, end)):
-            batch[j] = x0[0] * masks[c][..., np.newaxis]
+        for j in range(bsz):
+            batch[j] = x0[0] * selected_masks[start + j][..., np.newaxis]
         yb, n_out = _predict_probs(model, batch)
         scores = _gather_target_score(yb, target_class, n_out)
         weights.extend([float(s) for s in scores])
     timings["masked_forwards"] = time.perf_counter() - t_mask_fwd0
-    w_vec = np.asarray(weights, dtype=np.float32).reshape(n_ch)
-    cam = np.tensordot(w_vec, masks, axes=([0], [0]))
+    w_vec = np.asarray(weights, dtype=np.float32).reshape(n_sel)
+    cam = np.tensordot(w_vec, selected_masks, axes=([0], [0]))
     cam = np.maximum(cam.astype(np.float32), 0.0)
     norm_cam = _normalize_cam_to_unit(cam)
     timings["total"] = time.perf_counter() - t0
@@ -833,21 +842,83 @@ def predict_chexit_from_bgr(bgr_uint8: np.ndarray) -> Dict[str, Union[str, float
     _pipeline_log.info("Step 1/4 done in %.2fs", time.perf_counter() - t0)
 
     t0 = time.perf_counter()
-    _pipeline_log.info("Step 2–4/4: preprocess + TB score + ensemble + Score-CAM + overlay…")
-    pred_label, prob_tb, ovl = run_scorecam_with_unet_lung_mask(
-        mobilenet,
-        bgr_uint8,
-        lung_mask,
-    )
-    prob_mob = prob_tb
+    _pipeline_log.info("Step 2–4/4: preprocess + TB score + ensemble + fused Score-CAM + overlay…")
+    x_mob, _, _ = preprocess_cxr_for_mobilenet(bgr_uint8, lung_mask=lung_mask)
     x_eff = preprocess_cxr_for_efficientnet(bgr_uint8, lung_mask=lung_mask)
     x_den = preprocess_cxr_for_densenet(bgr_uint8, lung_mask=lung_mask)
+    prob_mob = float(np.squeeze(mobilenet.predict(x_mob, verbose=0)))
     prob_eff = float(np.squeeze(efficientnet.predict(x_eff, verbose=0)))
     prob_den = float(np.squeeze(densenet.predict(x_den, verbose=0)))
+    pred_label = 1 if prob_mob >= 0.5 else 0
+    prob_tb = prob_mob
     w_m, w_e, w_d = _ensemble_weights()
     if USE_ENSEMBLE:
         prob_tb = (w_m * prob_tb) + (w_e * prob_eff) + (w_d * prob_den)
         pred_label = 1 if prob_tb >= 0.5 else 0
+
+    target_class = pred_label
+    if _env_truthy("CHEXIT_SKIP_SCORECAM"):
+        _pipeline_log.info("Score-CAM skipped (CHEXIT_SKIP_SCORECAM=1); using lung-mask heatmap.")
+        gray = _to_gray_uint8(bgr_uint8)
+        norm_cam_full = np.clip(lung_mask.astype(np.float32), 0.0, 1.0)
+        if norm_cam_full.shape != gray.shape:
+            norm_cam_full = cv2.resize(
+                norm_cam_full,
+                (gray.shape[1], gray.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+    else:
+        _pipeline_log.info("Computing per-model Score-CAM maps for fused explanation…")
+        _, cam_mob, t_mob = compute_fast_scorecam(
+            mobilenet,
+            x_mob,
+            target_class=target_class,
+            batch_size=int(os.environ.get("CHEXIT_SCORECAM_BATCH_MOBILENET", "32")),
+            max_channels=int(os.environ.get("CHEXIT_SCORECAM_MAX_CHANNELS_MOBILENET", "256")),
+        )
+        _, cam_eff, t_eff = compute_fast_scorecam(
+            efficientnet,
+            x_eff,
+            target_class=target_class,
+            penultimate_layer=os.environ.get("CHEXIT_EFFICIENTNET_SCORECAM_LAYER", "top_conv"),
+            batch_size=int(os.environ.get("CHEXIT_SCORECAM_BATCH_EFFICIENTNET", "16")),
+            max_channels=int(os.environ.get("CHEXIT_SCORECAM_MAX_CHANNELS_EFFICIENTNET", "256")),
+        )
+        cam_den, t_den = compute_densenet_fast_scorecam(
+            densenet,
+            x_den,
+            target_class=target_class,
+            target_layer_name=os.environ.get(
+                "CHEXIT_DENSENET_SCORECAM_LAYER",
+                "conv5_block16_concat",
+            ),
+            batch_size=int(os.environ.get("CHEXIT_SCORECAM_BATCH_DENSENET", "16")),
+            max_channels=int(os.environ.get("CHEXIT_SCORECAM_MAX_CHANNELS_DENSENET", "256")),
+        )
+        h_full, w_full = bgr_uint8.shape[:2]
+        cam_mob_f = cv2.resize(cam_mob.astype(np.float32), (w_full, h_full), interpolation=cv2.INTER_LINEAR)
+        cam_eff_f = cv2.resize(cam_eff.astype(np.float32), (w_full, h_full), interpolation=cv2.INTER_LINEAR)
+        cam_den_f = cv2.resize(cam_den.astype(np.float32), (w_full, h_full), interpolation=cv2.INTER_LINEAR)
+        cam_w_m, cam_w_e, cam_w_d = (w_m, w_e, w_d) if USE_ENSEMBLE else (1.0, 0.0, 0.0)
+        merged_cam = (cam_w_m * cam_mob_f) + (cam_w_e * cam_eff_f) + (cam_w_d * cam_den_f)
+        norm_cam_full = _normalize_cam_to_unit(merged_cam)
+        _pipeline_log.info(
+            "Score-CAM done m=%.1fs e=%.1fs d=%.1fs | channels used m=%d e=%d d=%d",
+            t_mob.get("total", 0.0),
+            t_eff.get("total", 0.0),
+            t_den.get("total", 0.0),
+            int(t_mob.get("channels_used", 0)),
+            int(t_eff.get("channels_used", 0)),
+            int(t_den.get("channels_used", 0)),
+        )
+
+    overlay_base_full = preprocess_original_for_overlay_base_fullres(bgr_uint8)
+    _, ovl = overlay_cam_on_image_masked(
+        overlay_base_full,
+        norm_cam_full,
+        lung_mask,
+        alpha=0.45,
+    )
     _pipeline_log.info(
         "Model probs m=%.4f e=%.4f d=%.4f | ensemble=%.4f (enabled=%s, w=[%.2f, %.2f, %.2f])",
         prob_mob,

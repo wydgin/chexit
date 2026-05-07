@@ -34,6 +34,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import sys
 
 from mobilenetv2_prog import (
     BASE_DIR,
@@ -47,6 +48,12 @@ from mobilenetv2_prog import (
     build_model,
     get_default_params,
 )
+
+BACKEND_DIR = BASE_DIR.parent / "chexit-backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from app.explainability.fast_scorecam import compute_fast_scorecam
 
 # Official MobileNet inference checkpoint (same default as mbnet_test.py).
 OFFICIAL_INFERENCE_FOLD = 0
@@ -300,6 +307,7 @@ def compute_scorecam(
     penultimate_layer: Optional[Union[str, tf.keras.layers.Layer]] = None,
     target_class: int,
     batch_size: int = 32,
+    max_channels: Optional[int] = 256,
     use_tf_keras_vis: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, float]]:
     """
@@ -322,49 +330,14 @@ def compute_scorecam(
         timings["total"] = time.perf_counter() - t0
         return raw, norm, timings
 
-    feat_layer = get_target_conv_layer(model, penultimate_layer)
-    feat_model = tf.keras.Model(model.input, feat_layer.output, name="scorecam_features")
-
-    t_act0 = time.perf_counter()
-    acts = feat_model.predict(seed_input, verbose=0)
-    timings["extract_activations"] = time.perf_counter() - t_act0
-
-    if acts.ndim != 4:
-        raise ValueError(f"Expected 4D activations, got {acts.shape}")
-
-    _, h, w, n_ch = acts.shape
-    _, H, W, _ = seed_input.shape
-    acts_ch = np.transpose(acts[0], (2, 0, 1))
-
-    t_up0 = time.perf_counter()
-    ups = np.empty((n_ch, H, W), dtype=np.float32)
-    for c in range(n_ch):
-        ups[c] = cv2.resize(acts_ch[c], (W, H), interpolation=cv2.INTER_LINEAR)
-    timings["upsample_maps"] = time.perf_counter() - t_up0
-
-    masks = _normalize_minmax_hw(ups)
-    x0 = seed_input.astype(np.float32)
-    weights: List[float] = []
-
-    t_mask_fwd0 = time.perf_counter()
-    for start in range(0, n_ch, batch_size):
-        end = min(start + batch_size, n_ch)
-        bsz = end - start
-        batch = np.empty((bsz, H, W, 3), dtype=np.float32)
-        for j, c in enumerate(range(start, end)):
-            batch[j] = x0[0] * masks[c][..., np.newaxis]
-        yb, n_out = _predict_probs(model, batch)
-        scores = _gather_target_score(yb, target_class, n_out)
-        weights.extend([float(s) for s in scores])
-
-    timings["masked_forwards"] = time.perf_counter() - t_mask_fwd0
-
-    # Weight vector (n_ch,) so tensordot yields (H, W), not (1, H, W) from (n_ch,1) × (n_ch,H,W).
-    w_vec = np.asarray(weights, dtype=np.float32).reshape(n_ch)
-    cam = np.tensordot(w_vec, masks, axes=([0], [0]))
-    cam = np.maximum(cam.astype(np.float32), 0.0)
-    norm_cam = _normalize_cam_to_unit(cam)
-
+    cam, norm_cam, timings = compute_fast_scorecam(
+        model,
+        seed_input,
+        target_class=target_class,
+        penultimate_layer=penultimate_layer,
+        batch_size=batch_size,
+        max_channels=max_channels,
+    )
     timings["total"] = time.perf_counter() - t0
     return cam, norm_cam, timings
 
@@ -579,6 +552,7 @@ def run_scorecam_from_path(
     penultimate_layer: Optional[Union[str, tf.keras.layers.Layer]] = None,
     binary_target_mode: BinaryTargetMode = "predicted",
     batch_size: int = 32,
+    max_channels: int = 256,
     overlay_alpha: float = 0.45,
 ) -> Dict[str, Any]:
     """
@@ -637,6 +611,7 @@ def run_scorecam_from_path(
             penultimate_layer=penultimate_layer,
             binary_target_mode=binary_target_mode,
             batch_size=batch_size,
+            max_channels=max_channels,
             overlay_alpha=overlay_alpha,
         )
         cam_save = out.normalized_cam_lung_masked
@@ -650,6 +625,7 @@ def run_scorecam_from_path(
             penultimate_layer=penultimate_layer,
             binary_target_mode=binary_target_mode,
             batch_size=batch_size,
+            max_channels=max_channels,
             overlay_alpha=overlay_alpha,
         )
         cam_save = out.normalized_cam
@@ -691,6 +667,7 @@ def run_scorecam_mobilenet(
     multiclass_index: Optional[int] = None,
     multiclass_mode: MultiClassMode = "predicted",
     batch_size: int = 32,
+    max_channels: int = 256,
     overlay_alpha: float = 0.45,
     use_tf_keras_vis: bool = False,
 ) -> ScoreCamOutputs:
@@ -731,6 +708,7 @@ def run_scorecam_mobilenet(
         penultimate_layer=penultimate_layer,
         target_class=target_class,
         batch_size=batch_size,
+        max_channels=max_channels,
         use_tf_keras_vis=use_tf_keras_vis,
     )
     timings.update(t_cam)
@@ -772,6 +750,7 @@ def run_scorecam_original_base_unet_mask(
     multiclass_index: Optional[int] = None,
     multiclass_mode: MultiClassMode = "predicted",
     batch_size: int = 32,
+    max_channels: int = 256,
     overlay_alpha: float = 0.45,
     use_tf_keras_vis: bool = False,
 ) -> ScoreCamOutputs:
@@ -817,6 +796,7 @@ def run_scorecam_original_base_unet_mask(
         penultimate_layer=penultimate_layer,
         target_class=target_class,
         batch_size=batch_size,
+        max_channels=max_channels,
         use_tf_keras_vis=use_tf_keras_vis,
     )
     timings.update(t_cam)
@@ -863,6 +843,7 @@ def batch_scorecam_training_original_overlay(
     fold: int = OFFICIAL_INFERENCE_FOLD,
     overlay_alpha: float = 0.45,
     batch_size: int = 32,
+    max_channels: int = 256,
 ) -> pd.DataFrame:
     """
     First ``n`` Training CXRs that have a matching ``unet_export`` file; saves
@@ -905,6 +886,7 @@ def batch_scorecam_training_original_overlay(
             unet_bgr,
             overlay_alpha=overlay_alpha,
             batch_size=batch_size,
+            max_channels=max_channels,
         )
 
         cam_save = out.normalized_cam_lung_masked
@@ -991,6 +973,18 @@ if __name__ == "__main__":
         default=OFFICIAL_INFERENCE_FOLD,
         help=f"Weights fold (default: OFFICIAL_INFERENCE_FOLD={OFFICIAL_INFERENCE_FOLD})",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=32,
+        help="Masked-forward batch size for Score-CAM.",
+    )
+    parser.add_argument(
+        "--max-channels",
+        type=int,
+        default=256,
+        help="Top activation channels to score (faster than full channel set).",
+    )
     parser.add_argument("--out-dir", type=Path, default=Path("scorecam_output"), help="Output directory")
     parser.add_argument("--prefix", type=str, default="tb_case_01", help="Single-image mode: output filename prefix")
     parser.add_argument(
@@ -1008,6 +1002,8 @@ if __name__ == "__main__":
             out_dir=args.out_dir,
             csv_path=csv_p,
             fold=args.fold,
+            batch_size=args.batch_size,
+            max_channels=args.max_channels,
         )
         print(
             f"Processed {len(df)} image(s) (requested {n_batch}); "
@@ -1037,6 +1033,8 @@ if __name__ == "__main__":
         out_dir=args.out_dir,
         prefix=args.prefix,
         prefer_original_training_cxr=not args.no_original_base,
+        batch_size=args.batch_size,
+        max_channels=args.max_channels,
     )
     print(json.dumps(summary["metadata"], indent=2))
     print("saved_paths:", json.dumps(summary["saved_paths"], indent=2))

@@ -1,5 +1,5 @@
 """
-EfficientNet Score-CAM for single-image TB diagnosis workflow.
+DenseNet Score-CAM for single-image TB diagnosis workflow.
 
 Web-app friendly:
 - importable predictor object that can stay in memory across requests
@@ -17,55 +17,59 @@ import cv2
 import numpy as np
 import tensorflow as tf
 from matplotlib import cm
-
 import sys
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent / "chexit-backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.explainability.fast_scorecam import compute_fast_scorecam
+from app.explainability.densenet_fast_scorecam import compute_densenet_fast_scorecam
 
 BASE_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = BASE_DIR / "efficientnet_tb_output"
+OUTPUT_DIR = BASE_DIR / "densenet_tb_output"
 WEIGHTS_DIR = OUTPUT_DIR / "weights"
-IMG_SIZE = 260
+IMG_SIZE = 256
 
 PathLike = Union[str, Path]
-_PREDICTOR_CACHE: Dict[str, "EfficientNetScoreCamPredictor"] = {}
+_PREDICTOR_CACHE: Dict[str, "DenseNetScoreCamPredictor"] = {}
 
 
-def build_efficientnet_model() -> tf.keras.Model:
-    data_augmentation = tf.keras.Sequential([tf.keras.layers.RandomFlip("horizontal")])
-    base_model = tf.keras.applications.EfficientNetB2(
-        input_shape=(IMG_SIZE, IMG_SIZE, 3), include_top=False, weights=None
+def build_densenet_model() -> tf.keras.Model:
+    base = tf.keras.applications.DenseNet121(
+        input_shape=(IMG_SIZE, IMG_SIZE, 3),
+        include_top=False,
+        weights=None,
+        pooling=None,
     )
-    model = tf.keras.Sequential(
-        [
-            tf.keras.layers.Input(shape=(IMG_SIZE, IMG_SIZE, 3)),
-            data_augmentation,
-            base_model,
-            tf.keras.layers.GlobalAveragePooling2D(),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dropout(0.6),
-            tf.keras.layers.Dense(1, activation="sigmoid"),
-        ]
-    )
-    return model
+    base.trainable = False
+    inputs = tf.keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3), name="image_input")
+    x = base(inputs, training=False)
+    x = tf.keras.layers.GlobalAveragePooling2D(name="global_pool")(x)
+    x = tf.keras.layers.BatchNormalization(name="head_bn")(x)
+    x = tf.keras.layers.Dropout(0.4, name="head_dropout_1")(x)
+    x = tf.keras.layers.Dense(
+        512,
+        activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(1e-4),
+        name="head_dense_1",
+    )(x)
+    x = tf.keras.layers.Dropout(0.4, name="head_dropout_final")(x)
+    out = tf.keras.layers.Dense(1, activation="sigmoid", dtype="float32", name="tb_output")(x)
+    return tf.keras.Model(inputs, out, name="densenet121_tb_classifier")
 
 
 @dataclass
-class EfficientNetScoreCamResult:
+class DenseNetScoreCamResult:
     output_path: str
     predicted_probability: float
     predicted_label: int
 
 
-class EfficientNetScoreCamPredictor:
+class DenseNetScoreCamPredictor:
     def __init__(
         self,
         model: tf.keras.Model,
-        target_layer_name: str = "top_conv",
+        target_layer_name: str = "conv5_block16_concat",
         batch_size: int = 16,
         max_channels: int = 256,
     ):
@@ -78,17 +82,15 @@ class EfficientNetScoreCamPredictor:
     def from_weights(
         cls,
         weights_path: PathLike,
-        target_layer_name: str = "top_conv",
+        target_layer_name: str = "conv5_block16_concat",
         batch_size: int = 16,
         max_channels: int = 256,
-    ) -> "EfficientNetScoreCamPredictor":
+    ) -> "DenseNetScoreCamPredictor":
         weights_path = Path(weights_path)
         if not weights_path.exists():
             raise FileNotFoundError(f"Weights file not found: {weights_path}")
-
-        model = build_efficientnet_model()
+        model = build_densenet_model()
         model.load_weights(weights_path)
-        model.layers[0].trainable = False
         return cls(
             model=model,
             target_layer_name=target_layer_name,
@@ -101,10 +103,9 @@ class EfficientNetScoreCamPredictor:
         input_image_path: PathLike,
         output_image_path: PathLike,
         overlay_image_path: Optional[PathLike] = None,
-    ) -> EfficientNetScoreCamResult:
+    ) -> DenseNetScoreCamResult:
         input_image_path = Path(input_image_path)
         output_image_path = Path(output_image_path)
-
         seg_bgr = cv2.imread(str(input_image_path))
         if seg_bgr is None:
             raise FileNotFoundError(f"Unable to read input image: {input_image_path}")
@@ -122,35 +123,30 @@ class EfficientNetScoreCamPredictor:
             overlay_resized = seg_resized
 
         x_img = np.expand_dims(seg_resized, axis=0).astype(np.float32)
-        x_img = tf.keras.applications.efficientnet.preprocess_input(x_img)
-
+        x_img = tf.keras.applications.densenet.preprocess_input(x_img)
         pred_prob = float(self.model(x_img, training=False).numpy()[0][0])
         pred_label = int(pred_prob >= 0.5)
 
-        _, heatmap, _ = compute_fast_scorecam(
+        heatmap, _ = compute_densenet_fast_scorecam(
             self.model,
             x_img,
             target_class=pred_label,
-            penultimate_layer=self.target_layer_name,
+            target_layer_name=self.target_layer_name,
             batch_size=self.batch_size,
             max_channels=self.max_channels,
         )
-
         heat_rgb = (cm.jet(heatmap)[..., :3] * 255).astype(np.float32)
         lung_mask = (np.max(seg_resized, axis=-1, keepdims=True) > 10).astype(np.float32)
         heatmap_expanded = np.expand_dims(heatmap, axis=-1)
         alpha_map = np.clip((heatmap_expanded - 0.25) / 0.75, 0.0, 1.0) * 0.65
         final_alpha = alpha_map * lung_mask
-
         base_float = overlay_resized.astype(np.float32)
-        blended = (heat_rgb * final_alpha + base_float * (1.0 - final_alpha)).astype(
-            np.uint8
-        )
+        blended = (heat_rgb * final_alpha + base_float * (1.0 - final_alpha)).astype(np.uint8)
 
         output_image_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(output_image_path), cv2.cvtColor(blended, cv2.COLOR_RGB2BGR))
 
-        return EfficientNetScoreCamResult(
+        return DenseNetScoreCamResult(
             output_path=str(output_image_path),
             predicted_probability=pred_prob,
             predicted_label=pred_label,
@@ -159,14 +155,14 @@ class EfficientNetScoreCamPredictor:
 
 def get_cached_predictor(
     weights_path: PathLike,
-    target_layer_name: str = "top_conv",
+    target_layer_name: str = "conv5_block16_concat",
     batch_size: int = 16,
     max_channels: int = 256,
-) -> EfficientNetScoreCamPredictor:
+) -> DenseNetScoreCamPredictor:
     key = f"{Path(weights_path).resolve()}::{target_layer_name}::{batch_size}::{max_channels}"
     predictor = _PREDICTOR_CACHE.get(key)
     if predictor is None:
-        predictor = EfficientNetScoreCamPredictor.from_weights(
+        predictor = DenseNetScoreCamPredictor.from_weights(
             weights_path=weights_path,
             target_layer_name=target_layer_name,
             batch_size=batch_size,
@@ -179,17 +175,17 @@ def get_cached_predictor(
 def generate_scorecam_heatmap(
     input_image_path: PathLike,
     output_image_path: PathLike,
-    predictor: Optional[EfficientNetScoreCamPredictor] = None,
+    predictor: Optional[DenseNetScoreCamPredictor] = None,
     weights_path: Optional[PathLike] = None,
     overlay_image_path: Optional[PathLike] = None,
     use_cache: bool = True,
-    target_layer_name: str = "top_conv",
+    target_layer_name: str = "conv5_block16_concat",
     batch_size: int = 16,
     max_channels: int = 256,
-) -> EfficientNetScoreCamResult:
+) -> DenseNetScoreCamResult:
     if predictor is None:
         resolved_weights = (
-            Path(weights_path) if weights_path else (WEIGHTS_DIR / "fold_0.weights.h5")
+            Path(weights_path) if weights_path else (WEIGHTS_DIR / "fold_1_phase2_best.weights.h5")
         )
         if use_cache:
             predictor = get_cached_predictor(
@@ -199,7 +195,7 @@ def generate_scorecam_heatmap(
                 max_channels=max_channels,
             )
         else:
-            predictor = EfficientNetScoreCamPredictor.from_weights(
+            predictor = DenseNetScoreCamPredictor.from_weights(
                 weights_path=resolved_weights,
                 target_layer_name=target_layer_name,
                 batch_size=batch_size,
@@ -215,13 +211,13 @@ def generate_scorecam_heatmap(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate EfficientNet Score-CAM heatmap for one image."
+        description="Generate DenseNet Score-CAM heatmap for one image."
     )
     parser.add_argument("--input", required=True, help="Input segmented image path.")
     parser.add_argument("--output", required=True, help="Output heatmap image path.")
     parser.add_argument(
         "--weights",
-        default=str(WEIGHTS_DIR / "fold_0.weights.h5"),
+        default=str(WEIGHTS_DIR / "fold_1_phase2_best.weights.h5"),
         help="Model weights path.",
     )
     parser.add_argument(
@@ -265,3 +261,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
