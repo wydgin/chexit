@@ -9,6 +9,9 @@ import Stack from '@mui/material/Stack';
 import LinearProgress from '@mui/material/LinearProgress';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
+import IconButton from '@mui/material/IconButton';
+import ChevronLeft from '@mui/icons-material/ChevronLeft';
+import ChevronRight from '@mui/icons-material/ChevronRight';
 import { doc, onSnapshot, Timestamp } from 'firebase/firestore';
 import type { PredictUiState } from '../../api/chexit';
 import { db } from '../../firebase';
@@ -30,6 +33,7 @@ type FeaturesProps = {
   /** Local `blob:` URL from file picker — shown immediately before any Firebase upload. */
   localPreviewUrl?: string | null;
   predictUi: PredictUiState;
+  onNavigateIndex?: (nextIndex: number) => void;
 };
 
 // function contributionBars(riskScore: number) {
@@ -71,7 +75,12 @@ function contributionBars(contrib?: {
   ];
 }
 
-export default function Features({ previewImageUrl, localPreviewUrl, predictUi }: FeaturesProps) {
+export default function Features({
+  previewImageUrl,
+  localPreviewUrl,
+  predictUi,
+  onNavigateIndex,
+}: FeaturesProps) {
   const pageBg = 'background.default';
   const cardBg = 'background.default';
   const cardBorder = 'divider';
@@ -110,17 +119,22 @@ export default function Features({ previewImageUrl, localPreviewUrl, predictUi }
   }, []);
 
   const remotePreviewSrc = previewImageUrl ?? latestUpload?.downloadURL ?? null;
-  const previewSrc = localPreviewUrl ?? remotePreviewSrc;
+  const hasBatch = predictUi.items.length > 0;
+  const safeIndex = Math.max(0, Math.min(predictUi.currentIndex, Math.max(0, predictUi.items.length - 1)));
+  const selectedItem = hasBatch ? predictUi.items[safeIndex] : null;
+  const previewSrc = selectedItem?.localPreviewUrl ?? localPreviewUrl ?? remotePreviewSrc;
   const hasRemoteImage = Boolean(remotePreviewSrc);
-  const previewSubheader = localPreviewUrl && !previewImageUrl
-    ? 'Preview • not uploaded yet'
-    : previewImageUrl
-      ? 'Uploaded • just now'
-      : hasRemoteImage
-        ? formatUploadedAt(latestUpload?.uploadedAt ?? null)
-        : 'No image uploaded';
+  const previewSubheader = hasBatch
+    ? `Image ${safeIndex + 1} of ${predictUi.items.length} • ${selectedItem?.fileName ?? 'selected'}`
+    : localPreviewUrl && !previewImageUrl
+      ? 'Preview • not uploaded yet'
+      : previewImageUrl
+        ? 'Uploaded • just now'
+        : hasRemoteImage
+          ? formatUploadedAt(latestUpload?.uploadedAt ?? null)
+          : 'No image uploaded';
 
-  const pred = predictUi.data;
+  const pred = selectedItem?.result ?? predictUi.data;
   const heatmapB64 = pred?.heatmap?.trim() ?? '';
   const hasHeatmap = heatmapB64 !== '';
   const heatmapSrc = hasHeatmap ? `data:image/png;base64,${heatmapB64}` : '';
@@ -139,6 +153,8 @@ export default function Features({ previewImageUrl, localPreviewUrl, predictUi }
   const analysisVersionKey = pred
     ? `${diagnosisLine}|${riskPct ?? ''}|${confidenceLine}`
     : 'no-analysis';
+  const canGoPrev = hasBatch && safeIndex > 0;
+  const canGoNext = hasBatch && safeIndex < predictUi.items.length - 1;
   // const modelRows = pred && riskPct != null ? contributionBars(Number(pred.risk_score)) : [
   //   { label: 'MobileNet-V2', value: 60, barColor: '#6366f1' },
   //   { label: 'ResNet-50', value: 80, barColor: '#3b82f6' },
@@ -146,6 +162,24 @@ export default function Features({ previewImageUrl, localPreviewUrl, predictUi }
   // ];
   // const modelRows = pred && riskPct != null
   const modelRows = contributionBars(pred?.model_contributions);
+
+  React.useEffect(() => {
+    if (!hasBatch || !onNavigateIndex) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowLeft' && canGoPrev) {
+        event.preventDefault();
+        onNavigateIndex(safeIndex - 1);
+      } else if (event.key === 'ArrowRight' && canGoNext) {
+        event.preventDefault();
+        onNavigateIndex(safeIndex + 1);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [hasBatch, onNavigateIndex, canGoPrev, canGoNext, safeIndex]);
+
   return (
     <Box sx={{ bgcolor: pageBg }}>
       <Container id="features" maxWidth="lg" sx={{ pt: { xs: 4, md: 5 }, pb: { xs: 6, md: 7 } }}>
@@ -187,13 +221,36 @@ export default function Features({ previewImageUrl, localPreviewUrl, predictUi }
             }}
           >
             <CardHeader
-              title="Input X-Ray"
+              title={
+                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                  <Typography component="span" sx={{ fontSize: 14, fontWeight: 600 }}>
+                    Input X-Ray
+                  </Typography>
+                  {hasBatch ? (
+                    <Stack direction="row" alignItems="center" spacing={0.5}>
+                      <IconButton
+                        size="small"
+                        disabled={!canGoPrev}
+                        onClick={() => onNavigateIndex?.(safeIndex - 1)}
+                      >
+                        <ChevronLeft fontSize="small" />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        disabled={!canGoNext}
+                        onClick={() => onNavigateIndex?.(safeIndex + 1)}
+                      >
+                        <ChevronRight fontSize="small" />
+                      </IconButton>
+                    </Stack>
+                  ) : null}
+                </Stack>
+              }
               subheader={previewSubheader}
               sx={{
                 pb: 1,
                 '& .MuiCardHeader-title': {
-                  fontSize: 14,
-                  fontWeight: 600,
+                  width: '100%',
                 },
                 '& .MuiCardHeader-subheader': {
                   color: mutedText,
@@ -398,13 +455,36 @@ export default function Features({ previewImageUrl, localPreviewUrl, predictUi }
             }}
           >
             <CardHeader
-              title="Prediction Heatmap"
+              title={
+                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                  <Typography component="span" sx={{ fontSize: 14, fontWeight: 600 }}>
+                    Prediction Heatmap
+                  </Typography>
+                  {hasBatch ? (
+                    <Stack direction="row" alignItems="center" spacing={0.5}>
+                      <IconButton
+                        size="small"
+                        disabled={!canGoPrev}
+                        onClick={() => onNavigateIndex?.(safeIndex - 1)}
+                      >
+                        <ChevronLeft fontSize="small" />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        disabled={!canGoNext}
+                        onClick={() => onNavigateIndex?.(safeIndex + 1)}
+                      >
+                        <ChevronRight fontSize="small" />
+                      </IconButton>
+                    </Stack>
+                  ) : null}
+                </Stack>
+              }
               subheader="Highlighted TB-suspect regions"
               sx={{
                 pb: 1,
                 '& .MuiCardHeader-title': {
-                  fontSize: 14,
-                  fontWeight: 600,
+                  width: '100%',
                 },
                 '& .MuiCardHeader-subheader': {
                   color: mutedText,
@@ -457,6 +537,42 @@ export default function Features({ previewImageUrl, localPreviewUrl, predictUi }
             </CardContent>
           </Card>
         </Box>
+        {hasBatch ? (
+          <Stack direction="row" justifyContent="center" spacing={0.75} sx={{ mt: 2 }}>
+            {predictUi.items.map((item, idx) => {
+              const isActive = idx === safeIndex;
+              const color =
+                item.status === 'error'
+                  ? '#ef4444'
+                  : item.status === 'done'
+                    ? '#22c55e'
+                    : item.status === 'processing'
+                      ? '#3b82f6'
+                      : '#6b7280';
+              return (
+                <Box
+                  key={item.id}
+                  component="button"
+                  type="button"
+                  aria-label={`Jump to image ${idx + 1}`}
+                  onClick={() => onNavigateIndex?.(idx)}
+                  sx={{
+                    width: isActive ? 12 : 10,
+                    height: isActive ? 12 : 10,
+                    borderRadius: '50%',
+                    border: 'none',
+                    p: 0,
+                    cursor: 'pointer',
+                    bgcolor: color,
+                    opacity: isActive ? 1 : 0.45,
+                    transform: isActive ? 'scale(1.05)' : 'none',
+                    transition: 'all 120ms ease',
+                  }}
+                />
+              );
+            })}
+          </Stack>
+        ) : null}
       </Container>
     </Box>
   );

@@ -12,10 +12,23 @@ export type PredictResponse = {
   model_contributions?: ModelContributions;
 };
 
+export type BatchItemStatus = 'queued' | 'processing' | 'done' | 'error';
+
+export type BatchPredictItem = {
+  id: string;
+  fileName: string;
+  localPreviewUrl: string | null;
+  status: BatchItemStatus;
+  result: PredictResponse | null;
+  error: string | null;
+};
+
 export type PredictUiState = {
   loading: boolean;
   error: string | null;
-  data: PredictResponse | null;
+  data: PredictResponse | null; // selected item's result (for backwards compatibility)
+  items: BatchPredictItem[];
+  currentIndex: number;
 };
 
 /** Production FastAPI on DO (no trailing slash). Override with VITE_CHEXIT_API_URL. */
@@ -230,6 +243,52 @@ export async function predictImage(file: File): Promise<PredictResponse> {
     totalElapsedSec: Math.round((performance.now() - t0) / 1000),
   });
   return out;
+}
+
+export function createBatchItems(files: File[]): BatchPredictItem[] {
+  return files.map((file, idx) => {
+    const isDicom =
+      file.type === 'application/dicom' ||
+      file.type === 'application/octet-stream' ||
+      /\.(dcm|dicom)$/i.test(file.name);
+    return {
+      id: `${Date.now()}-${idx}-${file.name}`,
+      fileName: file.name,
+      localPreviewUrl: isDicom ? null : URL.createObjectURL(file),
+      status: 'queued',
+      result: null,
+      error: null,
+    };
+  });
+}
+
+export function releaseBatchPreviewUrls(items: BatchPredictItem[]): void {
+  items.forEach((item) => {
+    if (item.localPreviewUrl) {
+      URL.revokeObjectURL(item.localPreviewUrl);
+    }
+  });
+}
+
+export async function predictImagesSequential(
+  files: File[],
+  onItemUpdate: (nextItems: BatchPredictItem[], currentIndex: number) => void,
+): Promise<BatchPredictItem[]> {
+  const items = createBatchItems(files);
+  onItemUpdate([...items], 0);
+  for (let i = 0; i < files.length; i += 1) {
+    items[i] = { ...items[i], status: 'processing', error: null };
+    onItemUpdate([...items], i);
+    try {
+      const result = await predictImage(files[i]);
+      items[i] = { ...items[i], status: 'done', result, error: null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Analyze failed';
+      items[i] = { ...items[i], status: 'error', result: null, error: message };
+    }
+    onItemUpdate([...items], i);
+  }
+  return items;
 }
 
 function pickStr(o: Record<string, unknown>, ...keys: string[]): string {

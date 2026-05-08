@@ -16,6 +16,8 @@ const initialPredict: PredictUiState = {
   loading: false,
   error: null,
   data: null,
+  items: [],
+  currentIndex: 0,
 };
 
 export default function MarketingPage(props: { disableCustomTheme?: boolean }) {
@@ -29,6 +31,22 @@ export default function MarketingPage(props: { disableCustomTheme?: boolean }) {
       loading: next.loading,
       error: next.error,
       data: next.data ? { ...next.data } : null,
+      items: next.items ? [...next.items] : [],
+      currentIndex: next.currentIndex ?? 0,
+    });
+  }, []);
+
+  const handleNavigateResult = React.useCallback((nextIndex: number) => {
+    setPredictUi((prev) => {
+      if (prev.items.length === 0) return prev;
+      const clamped = Math.max(0, Math.min(nextIndex, prev.items.length - 1));
+      const item = prev.items[clamped];
+      return {
+        ...prev,
+        currentIndex: clamped,
+        data: item?.result ? { ...item.result } : null,
+        error: item?.status === 'error' ? item.error : prev.error,
+      };
     });
   }, []);
 
@@ -59,6 +77,7 @@ export default function MarketingPage(props: { disableCustomTheme?: boolean }) {
           previewImageUrl={uploadedPreviewUrl}
           localPreviewUrl={localPreviewUrl}
           predictUi={predictUi}
+          onNavigateIndex={handleNavigateResult}
         />
         {/* <Divider />
         <Testimonials />
