@@ -9,14 +9,8 @@ import Link from '@mui/material/Link';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import Chip from '@mui/material/Chip';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { predictImagesSequential, releaseBatchPreviewUrls } from '../../api/chexit';
+import { predictImagesSequential, releaseBatchPreviewUrls, uploadImage } from '../../api/chexit';
 import type { PredictUiState } from '../../api/chexit';
-import { storage, db } from '../../firebase';
-
-const UPLOADS_COLLECTION = 'uploads';
-const LATEST_DOC_ID = 'latest';
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_BATCH_IMAGES = 5;
 
@@ -162,16 +156,8 @@ export default function Hero({
     setUploadError(null);
     setUploadSuccess(false);
     try {
-      const storageRef = ref(storage, `uploads/${Date.now()}_${selectedFile.name}`);
-      await uploadBytes(storageRef, selectedFile);
-      const downloadURL = await getDownloadURL(storageRef);
-      const latestRef = doc(db, UPLOADS_COLLECTION, LATEST_DOC_ID);
-      await setDoc(latestRef, {
-        downloadURL,
-        fileName: selectedFile.name,
-        uploadedAt: serverTimestamp(),
-      });
-      onUploadComplete?.(downloadURL);
+      const uploaded = await uploadImage(selectedFile);
+      onUploadComplete?.(uploaded.downloadURL);
       setUploadSuccess(true);
       onLocalPreviewChange?.(null);
     } catch (err) {
@@ -315,12 +301,57 @@ export default function Hero({
             </Typography>
           )}
           {(predictUi.loading || analyzing) && (
-            <Alert severity="info" sx={{ maxWidth: 560, width: '100%', textAlign: 'center' }}>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                {progressText ?? 'Analyzing… This may take a few minutes.'}
-              </Typography>
-              <LinearProgress variant="determinate" value={progressValue} sx={{ borderRadius: 1 }} />
-            </Alert>
+            <Box
+              sx={(theme) => ({
+                maxWidth: 560,
+                width: '100%',
+                px: 2,
+                py: 1.5,
+                borderRadius: 3,
+                border: '1px solid',
+                borderColor: 'rgba(148, 163, 184, 0.35)',
+                bgcolor: 'rgba(255, 255, 255, 0.45)',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                boxShadow: '0 8px 24px rgba(15, 23, 42, 0.08)',
+                ...theme.applyStyles('dark', {
+                  bgcolor: 'rgba(30, 41, 59, 0.45)',
+                  borderColor: 'rgba(148, 163, 184, 0.25)',
+                  boxShadow: '0 8px 24px rgba(2, 6, 23, 0.45)',
+                }),
+              })}
+            >
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Box
+                  sx={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    bgcolor: 'info.main',
+                    animation: 'pulseDot 1.4s ease-in-out infinite',
+                    '@keyframes pulseDot': {
+                      '0%, 100%': { opacity: 0.45, transform: 'scale(0.95)' },
+                      '50%': { opacity: 1, transform: 'scale(1.08)' },
+                    },
+                  }}
+                />
+                <Typography variant="body2" sx={{ textAlign: 'left', fontWeight: 500 }}>
+                  {progressText ?? 'Analyzing… This may take a few minutes.'}
+                </Typography>
+              </Stack>
+              <LinearProgress
+                variant="determinate"
+                value={progressValue}
+                sx={{
+                  height: 7,
+                  borderRadius: 999,
+                  bgcolor: 'rgba(148, 163, 184, 0.22)',
+                  '& .MuiLinearProgress-bar': {
+                    borderRadius: 999,
+                  },
+                }}
+              />
+            </Box>
           )}
           {predictUi.items.length > 0 ? (
             <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" justifyContent="center">
@@ -345,7 +376,7 @@ export default function Hero({
             color="text.secondary"
             sx={{ textAlign: 'center' }}
           >
-            By clicking &quot;Upload&quot; you agree to our&nbsp;
+            By using our service, you agree to our&nbsp;
             <Link href="#" color="primary">
               Terms & Conditions
             </Link>

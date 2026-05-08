@@ -12,15 +12,15 @@ import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import ChevronLeft from '@mui/icons-material/ChevronLeft';
 import ChevronRight from '@mui/icons-material/ChevronRight';
-import { doc, onSnapshot, Timestamp } from 'firebase/firestore';
 import type { PredictUiState } from '../../api/chexit';
-import { db } from '../../firebase';
+import { fetchLatestUpload, type UploadRecord } from '../../api/chexit';
 
-function formatUploadedAt(seconds: number | null): string {
-  if (seconds == null) return 'Uploaded • 2 min ago';
-  const d = new Date(seconds * 1000);
+function formatUploadedAt(isoText: string | null): string {
+  if (!isoText) return 'Uploaded • recently';
+  const d = new Date(isoText);
   const now = Date.now();
   const diffMs = now - d.getTime();
+  if (!Number.isFinite(diffMs)) return 'Uploaded • recently';
   const diffMins = Math.floor(diffMs / 60000);
   if (diffMins < 1) return 'Uploaded • just now';
   if (diffMins === 1) return 'Uploaded • 1 min ago';
@@ -86,36 +86,25 @@ export default function Features({
   const cardBorder = 'divider';
   const mutedText = '#9ca3af';
 
-  const [latestUpload, setLatestUpload] = React.useState<{
-    downloadURL: string;
-    fileName: string;
-    uploadedAt: number | null;
-  } | null>(null);
+  const [latestUpload, setLatestUpload] = React.useState<UploadRecord | null>(null);
+  const [previewLoadFailed, setPreviewLoadFailed] = React.useState(false);
 
   React.useEffect(() => {
-    const latestRef = doc(db, 'uploads', 'latest');
-    const unsub = onSnapshot(
-      latestRef,
-      (snap) => {
-        const data = snap.data();
-        if (data?.downloadURL) {
-          const uploadedAt = data.uploadedAt instanceof Timestamp
-            ? data.uploadedAt.seconds
-            : typeof data.uploadedAt?.seconds === 'number'
-              ? data.uploadedAt.seconds
-              : null;
-          setLatestUpload({
-            downloadURL: data.downloadURL,
-            fileName: data.fileName ?? 'image',
-            uploadedAt,
-          });
-        } else {
+    let active = true;
+    fetchLatestUpload()
+      .then((record) => {
+        if (active) {
+          setLatestUpload(record);
+        }
+      })
+      .catch(() => {
+        if (active) {
           setLatestUpload(null);
         }
-      },
-      () => setLatestUpload(null),
-    );
-    return () => unsub();
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   const remotePreviewSrc = previewImageUrl ?? latestUpload?.downloadURL ?? null;
@@ -123,9 +112,15 @@ export default function Features({
   const safeIndex = Math.max(0, Math.min(predictUi.currentIndex, Math.max(0, predictUi.items.length - 1)));
   const selectedItem = hasBatch ? predictUi.items[safeIndex] : null;
   const previewSrc = selectedItem?.localPreviewUrl ?? localPreviewUrl ?? remotePreviewSrc;
+  React.useEffect(() => {
+    setPreviewLoadFailed(false);
+  }, [previewSrc]);
+  const showPreview = Boolean(previewSrc) && !previewLoadFailed;
   const hasRemoteImage = Boolean(remotePreviewSrc);
   const previewSubheader = hasBatch
     ? `Image ${safeIndex + 1} of ${predictUi.items.length} • ${selectedItem?.fileName ?? 'selected'}`
+    : previewLoadFailed
+      ? 'No image uploaded'
     : localPreviewUrl && !previewImageUrl
       ? 'Preview • not uploaded yet'
       : previewImageUrl
@@ -259,12 +254,13 @@ export default function Features({
               }}
             />
             <CardContent sx={{ pt: 1 }}>
-              {previewSrc ? (
+              {showPreview ? (
                 <Box
                   component="img"
                   key={previewSrc}
-                  src={previewSrc}
+                  src={previewSrc ?? undefined}
                   alt="Input chest X-ray"
+                  onError={() => setPreviewLoadFailed(true)}
                   sx={{
                     borderRadius: 2,
                     bgcolor: 'background.default',
@@ -290,13 +286,6 @@ export default function Features({
                   }}
                 />
               )}
-              {previewSrc ? (
-                <Box sx={{ mt: 1.5 }}>
-                  <Typography variant="caption" sx={{ color: mutedText }}>
-                    Input study (same resolution as uploaded).
-                  </Typography>
-                </Box>
-              ) : null}
             </CardContent>
           </Card>
 {/* Diagnosis */}
@@ -525,15 +514,6 @@ export default function Features({
                   }}
                 />
               )}
-              <Box sx={{ mt: 1.5 }}>
-                <Typography variant="caption" sx={{ color: mutedText }}>
-                  {predictUi.loading
-                    ? 'Generating overlay…'
-                    : pred
-                      ? 'Saliency overlay on the same study — same pixel dimensions as the input image.'
-                      : 'Heatmap appears here after Analyze.'}
-                </Typography>
-              </Box>
             </CardContent>
           </Card>
         </Box>

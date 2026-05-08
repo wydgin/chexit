@@ -31,6 +31,12 @@ export type PredictUiState = {
   currentIndex: number;
 };
 
+export type UploadRecord = {
+  downloadURL: string;
+  fileName: string;
+  uploadedAt: string;
+};
+
 /** Production FastAPI on DO (no trailing slash). Override with VITE_CHEXIT_API_URL. */
 export const CHEXIT_DEFAULT_API_ORIGIN = 'https://chexit.app';
 
@@ -68,6 +74,28 @@ function predictUrl(): string {
     return '/api/predict';
   }
   return `${resolvedApiOrigin()}/predict`;
+}
+
+function uploadUrl(): string {
+  if (canUseViteApiProxy()) {
+    return '/api/upload';
+  }
+  return `${resolvedApiOrigin()}/upload`;
+}
+
+function latestUploadUrl(): string {
+  if (canUseViteApiProxy()) {
+    return '/api/uploads/latest';
+  }
+  return `${resolvedApiOrigin()}/uploads/latest`;
+}
+
+function toAbsoluteApiUrl(urlOrPath: string): string {
+  if (/^https?:\/\//i.test(urlOrPath)) {
+    return urlOrPath;
+  }
+  const base = canUseViteApiProxy() ? window.location.origin : resolvedApiOrigin();
+  return `${base}${urlOrPath.startsWith('/') ? '' : '/'}${urlOrPath}`;
 }
 
 function apiLabelForErrors(): string {
@@ -243,6 +271,52 @@ export async function predictImage(file: File): Promise<PredictResponse> {
     totalElapsedSec: Math.round((performance.now() - t0) / 1000),
   });
   return out;
+}
+
+export async function uploadImage(file: File): Promise<UploadRecord> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch(uploadUrl(), {
+    method: 'POST',
+    body: formData,
+  });
+  const raw = (await res.json()) as Record<string, unknown>;
+  if (!res.ok) {
+    throw new Error(parseErrorDetail(raw) || `Upload failed (${res.status})`);
+  }
+  const downloadURL = pickStr(raw, 'download_url');
+  const fileName = pickStr(raw, 'file_name');
+  const uploadedAt = pickStr(raw, 'uploaded_at');
+  if (!downloadURL || !fileName || !uploadedAt) {
+    throw new Error('Invalid upload response from API.');
+  }
+  return {
+    downloadURL: toAbsoluteApiUrl(downloadURL),
+    fileName,
+    uploadedAt,
+  };
+}
+
+export async function fetchLatestUpload(): Promise<UploadRecord | null> {
+  const res = await fetch(latestUploadUrl(), { method: 'GET' });
+  if (res.status === 404) {
+    return null;
+  }
+  const raw = (await res.json()) as Record<string, unknown>;
+  if (!res.ok) {
+    throw new Error(parseErrorDetail(raw) || `Failed to fetch latest upload (${res.status})`);
+  }
+  const downloadURL = pickStr(raw, 'downloadURL');
+  const fileName = pickStr(raw, 'fileName');
+  const uploadedAt = pickStr(raw, 'uploadedAt');
+  if (!downloadURL) {
+    return null;
+  }
+  return {
+    downloadURL: toAbsoluteApiUrl(downloadURL),
+    fileName: fileName || 'image',
+    uploadedAt: uploadedAt || '',
+  };
 }
 
 export function createBatchItems(files: File[]): BatchPredictItem[] {

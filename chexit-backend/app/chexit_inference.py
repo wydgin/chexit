@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cv2
+import joblib
 import numpy as np
 
 # If this module is imported before app.main, still avoid CUDA probe on CPU-only hosts.
@@ -50,6 +51,18 @@ _MOBILENET_WEIGHTS_DIR = _ASSETS / "mobilenet_tb_output" / "weights"
 _MOBILENET_OPTUNA_JSON = _ASSETS / "mobilenet_tb_output" / "optuna_best_params.json"
 _EFFICIENTNET_WEIGHTS_DIR = _ASSETS / "efficientnet_tb_output" / "weights"
 _DENSENET_WEIGHTS_DIR = _ASSETS / "densenet_tb_output" / "weights"
+_META_LEARNER_PATH = Path(
+    os.environ.get(
+        "CHEXIT_META_LEARNER_PATH",
+        str(_ASSETS / "ensemble_output" / "meta_learner.joblib"),
+    )
+).resolve()
+_META_THRESHOLD_JSON = Path(
+    os.environ.get(
+        "CHEXIT_META_THRESHOLD_PATH",
+        str(_ASSETS / "ensemble_output" / "ensemble_threshold.json"),
+    )
+).resolve()
 
 IMG_SIZE = 224
 UNET_SIZE = 512
@@ -106,6 +119,8 @@ _unet_model: Optional[tf.keras.Model] = None
 _mobilenet_model: Optional[tf.keras.Model] = None
 _efficientnet_model: Optional[tf.keras.Model] = None
 _densenet_model: Optional[tf.keras.Model] = None
+_meta_learner: Any = None
+_meta_threshold: Optional[float] = None
 
 
 def _params_for_classifier() -> Dict[str, Any]:
@@ -554,6 +569,58 @@ def _dynamic_ensemble_weights(prob_mob: float, prob_eff: float, prob_den: float)
     return float(weights[0]), float(weights[1]), float(weights[2])
 
 
+def _meta_threshold_value() -> float:
+    global _meta_threshold
+    if _meta_threshold is None:
+        if _META_THRESHOLD_JSON.is_file():
+            with open(_META_THRESHOLD_JSON) as f:
+                data = json.load(f)
+            _meta_threshold = float(data.get("threshold", 0.5))
+        else:
+            _meta_threshold = 0.5
+    return float(_meta_threshold)
+
+
+def _get_meta_learner() -> Any:
+    global _meta_learner
+    if _meta_learner is None:
+        if not _META_LEARNER_PATH.is_file():
+            raise FileNotFoundError(f"Meta learner file not found: {_META_LEARNER_PATH}")
+        _meta_learner = joblib.load(str(_META_LEARNER_PATH))
+        _pipeline_log.info("Loaded meta learner: %s", _META_LEARNER_PATH.name)
+    return _meta_learner
+
+
+def _meta_weights_and_prob(prob_mob: float, prob_eff: float, prob_den: float) -> Tuple[float, float, float, float]:
+    """
+    Use trained meta learner for final probability and per-image contribution weights.
+    Input order is [densenet, mobilenet, efficientnet] based on ensemble artifacts.
+    Returns (w_m, w_e, w_d, p_meta).
+    """
+    meta = _get_meta_learner()
+    x = np.asarray([[float(prob_den), float(prob_mob), float(prob_eff)]], dtype=np.float32)
+    if hasattr(meta, "predict_proba"):
+        p_meta = float(meta.predict_proba(x)[0, 1])
+    else:
+        # Generic fallback for regressors / decision_function models.
+        p_raw = float(np.squeeze(meta.predict(x)))
+        p_meta = float(np.clip(p_raw, 0.0, 1.0))
+
+    if hasattr(meta, "coef_"):
+        coef = np.asarray(meta.coef_, dtype=np.float32).reshape(-1)
+        if coef.size >= 3:
+            # Match x feature order: [den, mob, eff]
+            contrib = np.abs(np.asarray([coef[0] * prob_den, coef[1] * prob_mob, coef[2] * prob_eff]))
+            s = float(np.sum(contrib))
+            if s > 0:
+                contrib = contrib / s
+                w_d, w_m, w_e = float(contrib[0]), float(contrib[1]), float(contrib[2])
+                return w_m, w_e, w_d, p_meta
+    # Fallback if coef_ unavailable
+    w_m, w_e, w_d = _dynamic_ensemble_weights(prob_mob, prob_eff, prob_den)
+    return w_m, w_e, w_d, p_meta
+
+
 def preprocess_original_for_overlay_base(
     image_bgr_or_gray: np.ndarray,
     *,
@@ -902,11 +969,16 @@ def predict_chexit_from_bgr(bgr_uint8: np.ndarray) -> Dict[str, Any]:
     pred_label = 1 if prob_mob >= 0.5 else 0
     prob_tb = prob_mob
     w_m, w_e, w_d = _ensemble_weights()
-    if ENSEMBLE_DYNAMIC_WEIGHTS:
-        w_m, w_e, w_d = _dynamic_ensemble_weights(prob_mob, prob_eff, prob_den)
     if USE_ENSEMBLE:
-        prob_tb = (w_m * prob_tb) + (w_e * prob_eff) + (w_d * prob_den)
-        pred_label = 1 if prob_tb >= 0.5 else 0
+        try:
+            w_m, w_e, w_d, prob_tb = _meta_weights_and_prob(prob_mob, prob_eff, prob_den)
+            pred_label = 1 if prob_tb >= _meta_threshold_value() else 0
+        except Exception as e:
+            _pipeline_log.warning("Meta learner unavailable; falling back to weighted averaging: %s", e)
+            if ENSEMBLE_DYNAMIC_WEIGHTS:
+                w_m, w_e, w_d = _dynamic_ensemble_weights(prob_mob, prob_eff, prob_den)
+            prob_tb = (w_m * prob_mob) + (w_e * prob_eff) + (w_d * prob_den)
+            pred_label = 1 if prob_tb >= 0.5 else 0
 
     target_class = pred_label
     if _env_truthy("CHEXIT_SKIP_SCORECAM"):

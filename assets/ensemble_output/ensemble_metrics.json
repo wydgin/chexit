@@ -1,0 +1,131 @@
+{
+  "n_samples": 800,
+  "meta_model_type": "logistic",
+  "meta_model_path": "/Users/jeffreyilagan/Desktop/UNet Segmentation/metalearner_output/meta_learner.joblib",
+  "target_sensitivity": 0.9,
+  "meta_model_coefficients": {
+    "densenet_proba": 4.854758280765248,
+    "mobilenet_proba": 0.3850095898525387,
+    "effnet_proba": 3.1526675067372527
+  },
+  "meta_model_intercept": -4.618782062868208,
+  "model_contributions": [
+    {
+      "model": "DenseNet",
+      "coefficient": 4.854758280765248,
+      "abs_coefficient": 4.854758280765248,
+      "contribution_percent": 57.84683542353679
+    },
+    {
+      "model": "MobileNet",
+      "coefficient": 0.3850095898525387,
+      "abs_coefficient": 0.3850095898525387,
+      "contribution_percent": 4.587578843816828
+    },
+    {
+      "model": "EfficientNet",
+      "coefficient": 3.1526675067372527,
+      "abs_coefficient": 3.1526675067372527,
+      "contribution_percent": 37.56558573264639
+    }
+  ],
+  "interpretation_note": "Model contribution percentages are derived from absolute LogisticRegression coefficients and indicate global weighting behavior of the meta-learner. Per-image contributions are approximate logit contributions computed as coefficient \u00d7 base-model probability.",
+  "metrics": {
+    "densenet": {
+      "threshold": 0.655250608921051,
+      "accuracy": 0.90625,
+      "sensitivity": 0.9010152284263959,
+      "recall": 0.9010152284263959,
+      "specificity": 0.9113300492610837,
+      "precision": 0.907928388746803,
+      "f1": 0.9044585987261147,
+      "auc": 0.9629291590607887,
+      "confusion_matrix": [
+        [
+          370,
+          36
+        ],
+        [
+          39,
+          355
+        ]
+      ],
+      "tn": 370,
+      "fp": 36,
+      "fn": 39,
+      "tp": 355
+    },
+    "mobilenet": {
+      "threshold": 0.5338555574417114,
+      "accuracy": 0.81375,
+      "sensitivity": 0.9010152284263959,
+      "recall": 0.9010152284263959,
+      "specificity": 0.729064039408867,
+      "precision": 0.7634408602150538,
+      "f1": 0.8265424912689173,
+      "auc": 0.9118114075667025,
+      "confusion_matrix": [
+        [
+          296,
+          110
+        ],
+        [
+          39,
+          355
+        ]
+      ],
+      "tn": 296,
+      "fp": 110,
+      "fn": 39,
+      "tp": 355
+    },
+    "efficientnet": {
+      "threshold": 0.3870872855186462,
+      "accuracy": 0.88375,
+      "sensitivity": 0.9010152284263959,
+      "recall": 0.9010152284263959,
+      "specificity": 0.8669950738916257,
+      "precision": 0.8679706601466992,
+      "f1": 0.8841843088418431,
+      "auc": 0.9462191493085943,
+      "confusion_matrix": [
+        [
+          352,
+          54
+        ],
+        [
+          39,
+          355
+        ]
+      ],
+      "tn": 352,
+      "fp": 54,
+      "fn": 39,
+      "tp": 355
+    },
+    "ensemble": {
+      "threshold": 0.5404975535015942,
+      "accuracy": 0.9175,
+      "sensitivity": 0.9035532994923858,
+      "recall": 0.9035532994923858,
+      "specificity": 0.9310344827586207,
+      "precision": 0.9270833333333334,
+      "f1": 0.9151670951156813,
+      "auc": 0.9714123177714985,
+      "confusion_matrix": [
+        [
+          378,
+          28
+        ],
+        [
+          38,
+          356
+        ]
+      ],
+      "tn": 378,
+      "fp": 28,
+      "fn": 38,
+      "tp": 356
+    }
+  }
+}
