@@ -120,6 +120,10 @@ class PredictResponse(BaseModel):
     risk_score: float = Field(..., description="Estimated TB probability (0–100)")
     confidence_label: str
     heatmap: str = Field(..., description="PNG overlay (CAM on CXR) as base64")
+    model_contributions: dict[str, float] = Field(
+        ...,
+        description="Per-image normalized model contribution percentages.",
+    )
 
 
 @app.get("/")
@@ -187,4 +191,5 @@ async def predict(file: UploadFile = File(...)) -> PredictResponse:
         risk_score=float(out["risk_score"]),
         confidence_label=str(out["confidence_label"]),
         heatmap=str(out["heatmap"]),
+        model_contributions=dict(out["model_contributions"]),
     )

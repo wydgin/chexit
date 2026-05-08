@@ -65,6 +65,11 @@ MIN_LUNG_PIXELS = int(os.environ.get("CHEXIT_MIN_LUNG_PIXELS", "200"))
 EFFICIENTNET_DROPOUT = float(os.environ.get("CHEXIT_EFFICIENTNET_DROPOUT", "0.6"))
 EFFICIENTNET_LR_HEAD = float(os.environ.get("CHEXIT_EFFICIENTNET_LR_HEAD", "1e-3"))
 USE_ENSEMBLE = os.environ.get("CHEXIT_USE_ENSEMBLE", "1").strip().lower() in ("1", "true", "yes")
+ENSEMBLE_DYNAMIC_WEIGHTS = os.environ.get("CHEXIT_DYNAMIC_ENSEMBLE_WEIGHTS", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 
 def _env_truthy(name: str) -> bool:
@@ -504,6 +509,51 @@ def _ensemble_weights() -> Tuple[float, float, float]:
     return float(vals[0]), float(vals[1]), float(vals[2])
 
 
+def _model_performance_priors() -> Tuple[float, float, float]:
+    """
+    Optional validation-performance priors (e.g., AUC) for
+    MobileNet/EfficientNet/DenseNet.
+    """
+    raw = os.environ.get("CHEXIT_MODEL_PERFORMANCE_PRIORS", "1.0,1.0,1.0").strip()
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if len(parts) != 3:
+        raise ValueError("CHEXIT_MODEL_PERFORMANCE_PRIORS must have exactly 3 comma-separated numbers.")
+    vals = np.asarray([float(x) for x in parts], dtype=np.float32)
+    vals = np.maximum(vals, 0.0)
+    s = float(np.sum(vals))
+    if s <= 0:
+        raise ValueError("CHEXIT_MODEL_PERFORMANCE_PRIORS must sum to > 0.")
+    vals = vals / s
+    return float(vals[0]), float(vals[1]), float(vals[2])
+
+
+def _dynamic_ensemble_weights(prob_mob: float, prob_eff: float, prob_den: float) -> Tuple[float, float, float]:
+    """
+    Per-image model contribution weights.
+    - confidence term: farther from 0.5 => higher confidence
+    - performance term: optional global prior (e.g., validation AUC)
+    """
+    pri_m, pri_e, pri_d = _model_performance_priors()
+    conf = np.asarray(
+        [
+            abs(float(prob_mob) - 0.5) * 2.0,
+            abs(float(prob_eff) - 0.5) * 2.0,
+            abs(float(prob_den) - 0.5) * 2.0,
+        ],
+        dtype=np.float32,
+    )
+    conf = np.clip(conf, 0.0, 1.0)
+    # Keep small floor so uncertain models still contribute a bit.
+    conf = np.maximum(conf, 0.05)
+    pri = np.asarray([pri_m, pri_e, pri_d], dtype=np.float32)
+    weights = conf * pri
+    s = float(np.sum(weights))
+    if s <= 0.0:
+        return _ensemble_weights()
+    weights = weights / s
+    return float(weights[0]), float(weights[1]), float(weights[2])
+
+
 def preprocess_original_for_overlay_base(
     image_bgr_or_gray: np.ndarray,
     *,
@@ -810,7 +860,7 @@ def _maybe_downscale_bgr_max_edge(bgr_uint8: np.ndarray) -> np.ndarray:
     return cv2.resize(bgr_uint8, (nw, nh), interpolation=cv2.INTER_AREA)
 
 
-def predict_chexit_from_bgr(bgr_uint8: np.ndarray) -> Dict[str, Union[str, float]]:
+def predict_chexit_from_bgr(bgr_uint8: np.ndarray) -> Dict[str, Any]:
     """
     Full pipeline for API: U-Net mask → MobileNet + Score-CAM overlay.
     ``bgr_uint8``: OpenCV BGR, uint8.
@@ -852,6 +902,8 @@ def predict_chexit_from_bgr(bgr_uint8: np.ndarray) -> Dict[str, Union[str, float
     pred_label = 1 if prob_mob >= 0.5 else 0
     prob_tb = prob_mob
     w_m, w_e, w_d = _ensemble_weights()
+    if ENSEMBLE_DYNAMIC_WEIGHTS:
+        w_m, w_e, w_d = _dynamic_ensemble_weights(prob_mob, prob_eff, prob_den)
     if USE_ENSEMBLE:
         prob_tb = (w_m * prob_tb) + (w_e * prob_eff) + (w_d * prob_den)
         pred_label = 1 if prob_tb >= 0.5 else 0
@@ -935,6 +987,11 @@ def predict_chexit_from_bgr(bgr_uint8: np.ndarray) -> Dict[str, Union[str, float
     diagnosis = CLASS_NAMES[pred_label]
     risk_score = round(prob_tb * 100.0, 2)
     confidence_label = "High risk" if pred_label == 1 else "Low risk"
+    model_contributions = {
+        "mobilenet-v2": round(w_m * 100.0, 2),
+        "efficientnet-b2": round(w_e * 100.0, 2),
+        "densenet-121": round(w_d * 100.0, 2),
+    }
     _pipeline_log.info("Encoding overlay PNG → base64…")
     heatmap_b64 = overlay_to_png_base64(ovl)
     _pipeline_log.info(
@@ -949,6 +1006,7 @@ def predict_chexit_from_bgr(bgr_uint8: np.ndarray) -> Dict[str, Union[str, float
         "risk_score": risk_score,
         "confidence_label": confidence_label,
         "heatmap": heatmap_b64,
+        "model_contributions": model_contributions,
     }
 
 
