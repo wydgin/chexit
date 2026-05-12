@@ -41,8 +41,8 @@ export type UploadRecord = {
 export const CHEXIT_DEFAULT_API_ORIGIN = 'https://chexit.app';
 
 /**
- * Same-origin `/api/predict` when Vite dev/preview proxies to local :8000.
- * Otherwise call the Render API (or VITE_CHEXIT_API_URL if set).
+ * Same-origin `/api/*` — Vite dev/preview proxies to :8000; Vercel `vercel.json` rewrites to the real API.
+ * Without this, production would call `https://chexit.app/predict`, which serves `index.html` (no JSON).
  */
 function canUseViteApiProxy(): boolean {
   if (import.meta.env.VITE_CHEXIT_API_URL?.trim()) {
@@ -52,6 +52,10 @@ function canUseViteApiProxy(): boolean {
     return true;
   }
   if (import.meta.env.DEV) {
+    return true;
+  }
+  // Production build on Vercel (or any host with `/api` → backend rewrites)
+  if (import.meta.env.PROD) {
     return true;
   }
   if (typeof window === 'undefined') {
@@ -100,7 +104,7 @@ function toAbsoluteApiUrl(urlOrPath: string): string {
 
 function apiLabelForErrors(): string {
   if (canUseViteApiProxy()) {
-    return '/api (Vite → http://127.0.0.1:8000)';
+    return import.meta.env.DEV ? '/api (Vite → :8000)' : '/api (same origin → backend)';
   }
   return resolvedApiOrigin();
 }
