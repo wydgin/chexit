@@ -37,12 +37,16 @@ export type UploadRecord = {
   uploadedAt: string;
 };
 
-/** Production FastAPI on DO (no trailing slash). Override with VITE_CHEXIT_API_URL. */
-export const CHEXIT_DEFAULT_API_ORIGIN = 'https://chexit.app';
+/**
+ * Production API host (HTTPS). Browser calls this directly — long `/predict` cannot go through
+ * Vercel `vercel.json` rewrites (edge proxy times out in ~seconds–1min while inference runs minutes).
+ * Override with VITE_CHEXIT_API_URL. Requires DNS `api` → droplet + TLS (e.g. Nginx + Certbot).
+ */
+export const CHEXIT_DEFAULT_API_ORIGIN = 'https://api.chexit.app';
 
 /**
- * Same-origin `/api/*` — Vite dev/preview proxies to :8000; Vercel `vercel.json` rewrites to the real API.
- * Without this, production would call `https://chexit.app/predict`, which serves `index.html` (no JSON).
+ * Same-origin `/api/*` — only for local dev (Vite proxy) or explicit `VITE_USE_RELATIVE_API=1`
+ * (e.g. short requests / preview). Do not rely on Vercel → DO rewrites for multi-minute `/predict`.
  */
 function canUseViteApiProxy(): boolean {
   if (import.meta.env.VITE_CHEXIT_API_URL?.trim()) {
@@ -52,10 +56,6 @@ function canUseViteApiProxy(): boolean {
     return true;
   }
   if (import.meta.env.DEV) {
-    return true;
-  }
-  // Production build on Vercel (or any host with `/api` → backend rewrites)
-  if (import.meta.env.PROD) {
     return true;
   }
   if (typeof window === 'undefined') {
@@ -221,6 +221,17 @@ export async function predictImage(file: File): Promise<PredictResponse> {
 
   const bodyText = await res.text();
   const contentType = res.headers.get('content-type') ?? '';
+  if (
+    !res.ok &&
+    url.startsWith('/api') &&
+    (res.status === 502 || res.status === 503 || res.status === 504)
+  ) {
+    throw new Error(
+      `HTTP ${res.status}: The /api proxy (e.g. Vercel → your droplet) timed out. ` +
+        `Inference can take several minutes; use the direct API host instead: HTTPS on api.yourdomain.com, ` +
+        `set VITE_CHEXIT_API_URL at build time, and CHEXIT_CORS_ORIGINS on the server for https://chexit.app.`,
+    );
+  }
   logClient('predict: response body received', {
     status: res.status,
     ok: res.ok,
