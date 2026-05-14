@@ -172,6 +172,54 @@ function logClient(stage: string, detail?: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Extra bytes around the file in multipart/form-data (boundaries, disposition, CRLFs).
+ * Browsers vary; use Network `Content-Length` when you need an exact upload total.
+ */
+const PREDICT_MULTIPART_META_BYTES_ESTIMATE = 900;
+
+function logPredictBandwidthSummary(args: {
+  file: File;
+  bodyText: string;
+  heatmapBase64: string;
+  response: Response;
+  predictUrl: string;
+}): void {
+  const { file, bodyText, heatmapBase64, response, predictUrl } = args;
+  const meta = PREDICT_MULTIPART_META_BYTES_ESTIMATE;
+  const resolvedUrl = response.url || predictUrl;
+
+  let resourceTiming: Record<string, unknown> | null = null;
+  if (typeof performance !== 'undefined' && typeof performance.getEntriesByName === 'function') {
+    const entries = performance.getEntriesByName(resolvedUrl, 'resource') as PerformanceResourceTiming[];
+    const last = entries[entries.length - 1];
+    if (last) {
+      resourceTiming = {
+        transferSize: last.transferSize,
+        encodedBodySize: last.encodedBodySize,
+        decodedBodySize: last.decodedBodySize,
+        nextHopProtocol: last.nextHopProtocol,
+      };
+    }
+  }
+
+  const cl = response.headers.get('content-length');
+  logClient('predict: bandwidth summary (dev)', {
+    note:
+      'Upload totals: use Network Content-Length or upload_imageBytes+upload_approxMultipartMetaBytes. ' +
+      'Response: response_bodyChars is full JSON text length (ASCII ≈ bytes). ' +
+      'resourceTiming is response-focused (decodedBodySize ≈ JSON bytes when not compressed).',
+    upload_imageBytes: file.size,
+    upload_approxMultipartMetaBytes: meta,
+    upload_approxTotalBytes: file.size + meta,
+    response_contentLengthHeader: cl ? Number(cl) : null,
+    response_bodyChars: bodyText.length,
+    response_heatmapBase64Chars: heatmapBase64.length,
+    response_approxJsonWithoutHeatmapStringChars: bodyText.length - heatmapBase64.length,
+    resourceTiming,
+  });
+}
+
 export async function predictImage(file: File): Promise<PredictResponse> {
   const url = predictUrl();
   const label = apiLabelForErrors();
@@ -284,6 +332,13 @@ export async function predictImage(file: File): Promise<PredictResponse> {
     confidence_label: out.confidence_label,
     heatmapBase64Chars: out.heatmap.length,
     totalElapsedSec: Math.round((performance.now() - t0) / 1000),
+  });
+  logPredictBandwidthSummary({
+    file,
+    bodyText,
+    heatmapBase64: out.heatmap,
+    response: res,
+    predictUrl: url,
   });
   return out;
 }
