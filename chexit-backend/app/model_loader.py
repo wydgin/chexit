@@ -1,5 +1,5 @@
 """
-Download U-Net artifacts from Google Drive (gdown) when missing under assets/models/.
+Download U-Net artifacts from Google Drive (gdown) when missing under assets/segmentation_models/.
 
 Drive files must be shared: Anyone with the link → Viewer.
 Override IDs with CHEXIT_GDOWN_UNET_BEST_ID, CHEXIT_GDOWN_UNET_WEIGHTS_ID, CHEXIT_GDOWN_UNET_FINAL_ID.
@@ -34,13 +34,15 @@ _MIN_BYTES = 1_000_000  # ignore tiny files (likely HTML error pages)
 def _assets_models_dir() -> Path:
     env = os.environ.get("CHEXIT_ASSETS_ROOT", "").strip()
     root = Path(env).resolve() if env else (_REPO_ROOT / "assets")
-    d = root / "models"
+    seg = root / "segmentation_models"
+    legacy = root / "models"
+    d = seg if seg.is_dir() or not legacy.is_dir() else legacy
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def _drive_models() -> dict[str, dict[str, str]]:
-    """Map logical name → file id and destination filename under assets/models/."""
+    """Map logical name → file id and destination filename under assets/segmentation_models/."""
     models: dict[str, dict[str, str]] = {
         "unet_best": {
             "id": os.environ.get(

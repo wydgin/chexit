@@ -23,6 +23,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent / "chexit-backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from app.chexit_inference import build_densenet_classifier_with_params, _params_for_densenet
 from app.explainability.densenet_fast_scorecam import compute_densenet_fast_scorecam
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -35,27 +36,7 @@ _PREDICTOR_CACHE: Dict[str, "DenseNetScoreCamPredictor"] = {}
 
 
 def build_densenet_model() -> tf.keras.Model:
-    base = tf.keras.applications.DenseNet121(
-        input_shape=(IMG_SIZE, IMG_SIZE, 3),
-        include_top=False,
-        weights=None,
-        pooling=None,
-    )
-    base.trainable = False
-    inputs = tf.keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3), name="image_input")
-    x = base(inputs, training=False)
-    x = tf.keras.layers.GlobalAveragePooling2D(name="global_pool")(x)
-    x = tf.keras.layers.BatchNormalization(name="head_bn")(x)
-    x = tf.keras.layers.Dropout(0.4, name="head_dropout_1")(x)
-    x = tf.keras.layers.Dense(
-        512,
-        activation="relu",
-        kernel_regularizer=tf.keras.regularizers.l2(1e-4),
-        name="head_dense_1",
-    )(x)
-    x = tf.keras.layers.Dropout(0.4, name="head_dropout_final")(x)
-    out = tf.keras.layers.Dense(1, activation="sigmoid", dtype="float32", name="tb_output")(x)
-    return tf.keras.Model(inputs, out, name="densenet121_tb_classifier")
+    return build_densenet_classifier_with_params(_params_for_densenet())
 
 
 @dataclass
@@ -185,7 +166,13 @@ def generate_scorecam_heatmap(
 ) -> DenseNetScoreCamResult:
     if predictor is None:
         resolved_weights = (
-            Path(weights_path) if weights_path else (WEIGHTS_DIR / "fold_1_phase2_best.weights.h5")
+            Path(weights_path)
+            if weights_path
+            else (
+                WEIGHTS_DIR / "dense_holdout_phase2_best.weights.h5"
+                if (WEIGHTS_DIR / "dense_holdout_phase2_best.weights.h5").is_file()
+                else WEIGHTS_DIR / "fold_1_phase2_best.weights.h5"
+            )
         )
         if use_cache:
             predictor = get_cached_predictor(
@@ -217,7 +204,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, help="Output heatmap image path.")
     parser.add_argument(
         "--weights",
-        default=str(WEIGHTS_DIR / "fold_1_phase2_best.weights.h5"),
+        default=str(
+            WEIGHTS_DIR / "dense_holdout_phase2_best.weights.h5"
+            if (WEIGHTS_DIR / "dense_holdout_phase2_best.weights.h5").is_file()
+            else WEIGHTS_DIR / "fold_1_phase2_best.weights.h5"
+        ),
         help="Model weights path.",
     )
     parser.add_argument(

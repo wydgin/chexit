@@ -1,131 +1,188 @@
 {
-  "n_samples": 800,
+  "target_sensitivity_for_threshold": 0.9,
+  "threshold_selected_on": "dev_val",
+  "threshold_applied_to_test": 0.5309409244640241,
   "meta_model_type": "logistic",
-  "meta_model_path": "/Users/jeffreyilagan/Desktop/UNet Segmentation/metalearner_output/meta_learner.joblib",
-  "target_sensitivity": 0.9,
+  "meta_model_path": "/Users/jeffreyilagan/Desktop/Final Thesis Program/metalearner_output/meta_learner.joblib",
   "meta_model_coefficients": {
-    "densenet_proba": 4.854758280765248,
-    "mobilenet_proba": 0.3850095898525387,
-    "effnet_proba": 3.1526675067372527
+    "densenet_proba": 3.2569843376163035,
+    "mobilenet_proba": 1.433849299847023,
+    "effnet_proba": 2.932832795751138
   },
-  "meta_model_intercept": -4.618782062868208,
+  "meta_model_intercept": -3.7172734285074007,
   "model_contributions": [
     {
       "model": "DenseNet",
-      "coefficient": 4.854758280765248,
-      "abs_coefficient": 4.854758280765248,
-      "contribution_percent": 57.84683542353679
+      "coefficient": 3.2569843376163035,
+      "abs_coefficient": 3.2569843376163035,
+      "contribution_percent": 42.72202051530499
     },
     {
       "model": "MobileNet",
-      "coefficient": 0.3850095898525387,
-      "abs_coefficient": 0.3850095898525387,
-      "contribution_percent": 4.587578843816828
+      "coefficient": 1.433849299847023,
+      "abs_coefficient": 1.433849299847023,
+      "contribution_percent": 18.807870365367634
     },
     {
       "model": "EfficientNet",
-      "coefficient": 3.1526675067372527,
-      "abs_coefficient": 3.1526675067372527,
-      "contribution_percent": 37.56558573264639
+      "coefficient": 2.932832795751138,
+      "abs_coefficient": 2.932832795751138,
+      "contribution_percent": 38.47010911932738
     }
   ],
   "interpretation_note": "Model contribution percentages are derived from absolute LogisticRegression coefficients and indicate global weighting behavior of the meta-learner. Per-image contributions are approximate logit contributions computed as coefficient \u00d7 base-model probability.",
-  "metrics": {
-    "densenet": {
-      "threshold": 0.655250608921051,
-      "accuracy": 0.90625,
-      "sensitivity": 0.9010152284263959,
-      "recall": 0.9010152284263959,
-      "specificity": 0.9113300492610837,
-      "precision": 0.907928388746803,
-      "f1": 0.9044585987261147,
-      "auc": 0.9629291590607887,
+  "dev_val": {
+    "n_samples": 400,
+    "ensemble_metrics": {
+      "threshold": 0.5309409244640241,
+      "accuracy": 0.925,
+      "sensitivity": 0.905,
+      "recall": 0.905,
+      "specificity": 0.945,
+      "precision": 0.9427083333333334,
+      "f1": 0.923469387755102,
+      "auc": 0.9781000000000001,
       "confusion_matrix": [
         [
-          370,
-          36
+          189,
+          11
         ],
         [
-          39,
-          355
+          19,
+          181
         ]
       ],
-      "tn": 370,
-      "fp": 36,
-      "fn": 39,
-      "tp": 355
+      "tn": 189,
+      "fp": 11,
+      "fn": 19,
+      "tp": 181
     },
-    "mobilenet": {
-      "threshold": 0.5338555574417114,
-      "accuracy": 0.81375,
-      "sensitivity": 0.9010152284263959,
-      "recall": 0.9010152284263959,
-      "specificity": 0.729064039408867,
-      "precision": 0.7634408602150538,
-      "f1": 0.8265424912689173,
-      "auc": 0.9118114075667025,
-      "confusion_matrix": [
-        [
-          296,
-          110
+    "metrics": {
+      "densenet": {
+        "threshold": 0.4623512625694275,
+        "accuracy": 0.9175,
+        "sensitivity": 0.9,
+        "recall": 0.9,
+        "specificity": 0.935,
+        "precision": 0.9326424870466321,
+        "f1": 0.916030534351145,
+        "auc": 0.9716,
+        "confusion_matrix": [
+          [
+            187,
+            13
+          ],
+          [
+            20,
+            180
+          ]
         ],
-        [
-          39,
-          355
-        ]
-      ],
-      "tn": 296,
-      "fp": 110,
-      "fn": 39,
-      "tp": 355
-    },
-    "efficientnet": {
-      "threshold": 0.3870872855186462,
-      "accuracy": 0.88375,
-      "sensitivity": 0.9010152284263959,
-      "recall": 0.9010152284263959,
-      "specificity": 0.8669950738916257,
-      "precision": 0.8679706601466992,
-      "f1": 0.8841843088418431,
-      "auc": 0.9462191493085943,
-      "confusion_matrix": [
-        [
-          352,
-          54
+        "tn": 187,
+        "fp": 13,
+        "fn": 20,
+        "tp": 180
+      },
+      "mobilenet": {
+        "threshold": 0.699948251247406,
+        "accuracy": 0.8775,
+        "sensitivity": 0.9,
+        "recall": 0.9,
+        "specificity": 0.855,
+        "precision": 0.861244019138756,
+        "f1": 0.8801955990220048,
+        "auc": 0.9456,
+        "confusion_matrix": [
+          [
+            171,
+            29
+          ],
+          [
+            20,
+            180
+          ]
         ],
-        [
-          39,
-          355
-        ]
-      ],
-      "tn": 352,
-      "fp": 54,
-      "fn": 39,
-      "tp": 355
-    },
-    "ensemble": {
-      "threshold": 0.5404975535015942,
-      "accuracy": 0.9175,
-      "sensitivity": 0.9035532994923858,
-      "recall": 0.9035532994923858,
-      "specificity": 0.9310344827586207,
-      "precision": 0.9270833333333334,
-      "f1": 0.9151670951156813,
-      "auc": 0.9714123177714985,
-      "confusion_matrix": [
-        [
-          378,
-          28
+        "tn": 171,
+        "fp": 29,
+        "fn": 20,
+        "tp": 180
+      },
+      "efficientnet": {
+        "threshold": 0.4023432433605194,
+        "accuracy": 0.91,
+        "sensitivity": 0.915,
+        "recall": 0.915,
+        "specificity": 0.905,
+        "precision": 0.905940594059406,
+        "f1": 0.9104477611940298,
+        "auc": 0.9712,
+        "confusion_matrix": [
+          [
+            181,
+            19
+          ],
+          [
+            17,
+            183
+          ]
         ],
-        [
-          38,
-          356
-        ]
-      ],
-      "tn": 378,
-      "fp": 28,
-      "fn": 38,
-      "tp": 356
+        "tn": 181,
+        "fp": 19,
+        "fn": 17,
+        "tp": 183
+      },
+      "ensemble": {
+        "threshold": 0.5309409244640241,
+        "accuracy": 0.925,
+        "sensitivity": 0.905,
+        "recall": 0.905,
+        "specificity": 0.945,
+        "precision": 0.9427083333333334,
+        "f1": 0.923469387755102,
+        "auc": 0.9781000000000001,
+        "confusion_matrix": [
+          [
+            189,
+            11
+          ],
+          [
+            19,
+            181
+          ]
+        ],
+        "tn": 189,
+        "fp": 11,
+        "fn": 19,
+        "tp": 181
+      }
     }
-  }
+  },
+  "test": {
+    "n_samples": 501,
+    "ensemble_metrics": {
+      "threshold": 0.5309409244640241,
+      "accuracy": 0.9101796407185628,
+      "sensitivity": 0.8844621513944223,
+      "recall": 0.8844621513944223,
+      "specificity": 0.936,
+      "precision": 0.9327731092436975,
+      "f1": 0.9079754601226994,
+      "auc": 0.968191235059761,
+      "confusion_matrix": [
+        [
+          234,
+          16
+        ],
+        [
+          29,
+          222
+        ]
+      ],
+      "tn": 234,
+      "fp": 16,
+      "fn": 29,
+      "tp": 222
+    },
+    "note": "Meta-learner and threshold are fixed from dev_val; no refit and no threshold tuning on test."
+  },
+  "test_eval_skipped": false
 }

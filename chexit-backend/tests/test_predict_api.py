@@ -14,10 +14,33 @@ from app.main import app
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ASSETS = REPO_ROOT / "assets"
 SAMPLE_CXR = ASSETS / "cxrin.png"
-UNET_PATH = ASSETS / "models" / "unet_lung_seg_best.keras"
-MOBILENET_WEIGHTS = ASSETS / "mobilenet_tb_output" / "weights" / "fold_1_weights.weights.h5"
-EFFICIENTNET_WEIGHTS = ASSETS / "efficientnet_tb_output" / "weights" / "fold_1.weights.h5"
-DENSENET_WEIGHTS = ASSETS / "densenet_tb_output" / "weights" / "fold_1_phase2_best.weights.h5"
+UNET_PATH = (
+    ASSETS / "segmentation_models" / "unet_lung_seg_best.keras"
+    if (ASSETS / "segmentation_models" / "unet_lung_seg_best.keras").is_file()
+    else ASSETS / "models" / "unet_lung_seg_best.keras"
+)
+def _first_weight(*candidates: Path) -> Path:
+    for path in candidates:
+        if path.is_file():
+            return path
+    return candidates[-1]
+
+
+MOBILENET_WEIGHTS = _first_weight(
+    ASSETS / "mobilenet_tb_output" / "weights" / "mob_holdout_best.weights.h5",
+    ASSETS / "mobilenet_tb_output" / "weights" / "mob_holdout_phase2_best.weights.h5",
+    ASSETS / "mobilenet_tb_output" / "weights" / "fold_1_weights.weights.h5",
+)
+EFFICIENTNET_WEIGHTS = _first_weight(
+    ASSETS / "efficientnet_tb_output" / "weights" / "eff_holdout_best.weights.h5",
+    ASSETS / "efficientnet_tb_output" / "weights" / "eff_holdout_phase2_best.weights.h5",
+    ASSETS / "efficientnet_tb_output" / "weights" / "fold_1.weights.h5",
+)
+DENSENET_WEIGHTS = _first_weight(
+    ASSETS / "densenet_tb_output" / "weights" / "dense_holdout_best.weights.h5",
+    ASSETS / "densenet_tb_output" / "weights" / "dense_holdout_phase2_best.weights.h5",
+    ASSETS / "densenet_tb_output" / "weights" / "fold_1_phase2_best.weights.h5",
+)
 
 
 def predict_dependencies_present() -> bool:

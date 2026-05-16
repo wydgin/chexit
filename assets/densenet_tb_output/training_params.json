@@ -1,0 +1,19 @@
+{
+  "backbone_name": "DenseNet121",
+  "optimizer": "adam",
+  "head_lr": 0.00043138049872830863,
+  "ft_lr": 1.0576902036995877e-05,
+  "weight_decay": 4.630228617122102e-05,
+  "dropout_rate": 0.41186023134240257,
+  "dense_units": 512,
+  "head_depth": 1,
+  "l2_strength": 1.115908855034341e-05,
+  "label_smoothing": 0.07259556788702394,
+  "batch_size": 16,
+  "unfreeze_ratio": 0.363988590983402,
+  "lr_schedule": "none",
+  "epochs_phase1": 12,
+  "epochs_phase2": 8,
+  "target_sensitivity": 0.9,
+  "use_memory_cache": false
+}

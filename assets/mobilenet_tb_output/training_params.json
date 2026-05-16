@@ -1,14 +1,24 @@
 {
   "backbone_name": "MobileNetV3Large",
+  "optimizer": "adam",
   "head_lr": 0.0010222688324868054,
   "ft_lr": 1.6103411959775305e-05,
+  "weight_decay": 1e-05,
   "dropout_rate": 0.48370984968502717,
   "dense_units": 128,
   "head_depth": 1,
   "l2_strength": 0.00018642504588457586,
+  "label_smoothing": 0.0,
   "batch_size": 16,
   "unfreeze_ratio": 0.34607907213971334,
+  "lr_schedule": "plateau",
+  "loss_type": "focal",
+  "focal_gamma": 1.2688788211753952,
+  "focal_alpha": 0.4579697458008886,
+  "tb_class_weight_multiplier": 1.2728711518605436,
+  "use_augmentation": true,
   "epochs_phase1": 15,
   "epochs_phase2": 10,
-  "target_sensitivity": 0.9
+  "target_sensitivity": 0.9,
+  "use_memory_cache": false
 }

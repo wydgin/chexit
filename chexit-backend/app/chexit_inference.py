@@ -19,7 +19,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import cv2
 import joblib
@@ -45,17 +45,44 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _assets_root() -> Path:
-    """Override with CHEXIT_ASSETS_ROOT for Docker / production (must contain models/ and mobilenet_tb_output/)."""
+    """Override with CHEXIT_ASSETS_ROOT for Docker / production (must contain segmentation_models/ and mobilenet_tb_output/)."""
     env = os.environ.get("CHEXIT_ASSETS_ROOT", "").strip()
     return Path(env).resolve() if env else (_REPO_ROOT / "assets")
 
 
+def _segmentation_models_dir(assets: Path) -> Path:
+    """U-Net artifacts: prefer segmentation_models/, fall back to legacy models/."""
+    seg = assets / "segmentation_models"
+    if seg.is_dir():
+        return seg
+    return assets / "models"
+
+
+def _resolve_unet_keras_path(assets: Path) -> Path:
+    for directory in (_segmentation_models_dir(assets), assets / "models"):
+        candidate = directory / "unet_lung_seg_best.keras"
+        if candidate.is_file():
+            return candidate
+    return _segmentation_models_dir(assets) / "unet_lung_seg_best.keras"
+
+
+def _load_training_params_json(*paths: Path) -> Dict[str, Any]:
+    for path in paths:
+        if path.is_file():
+            with open(path) as f:
+                return json.load(f)
+    return {}
+
+
 _ASSETS = _assets_root()
-_UNET_KERAS = _ASSETS / "models" / "unet_lung_seg_best.keras"
+_UNET_KERAS = _resolve_unet_keras_path(_ASSETS)
 _MOBILENET_WEIGHTS_DIR = _ASSETS / "mobilenet_tb_output" / "weights"
+_MOBILENET_TRAINING_PARAMS_JSON = _ASSETS / "mobilenet_tb_output" / "training_params.json"
 _MOBILENET_OPTUNA_JSON = _ASSETS / "mobilenet_tb_output" / "optuna_best_params.json"
 _EFFICIENTNET_WEIGHTS_DIR = _ASSETS / "efficientnet_tb_output" / "weights"
+_EFFICIENTNET_TRAINING_PARAMS_JSON = _ASSETS / "efficientnet_tb_output" / "training_params.json"
 _DENSENET_WEIGHTS_DIR = _ASSETS / "densenet_tb_output" / "weights"
+_DENSENET_TRAINING_PARAMS_JSON = _ASSETS / "densenet_tb_output" / "training_params.json"
 _META_LEARNER_PATH = Path(
     os.environ.get(
         "CHEXIT_META_LEARNER_PATH",
@@ -129,9 +156,9 @@ _meta_threshold: Optional[float] = None
 
 
 def _params_for_classifier() -> Dict[str, Any]:
-    if _MOBILENET_OPTUNA_JSON.is_file():
-        with open(_MOBILENET_OPTUNA_JSON) as f:
-            return json.load(f)
+    loaded = _load_training_params_json(_MOBILENET_TRAINING_PARAMS_JSON, _MOBILENET_OPTUNA_JSON)
+    if loaded:
+        return loaded
     return {
         "backbone_name": "MobileNetV3Large",
         "dense_units": 128,
@@ -140,37 +167,37 @@ def _params_for_classifier() -> Dict[str, Any]:
     }
 
 
+def _params_for_densenet() -> Dict[str, Any]:
+    loaded = _load_training_params_json(_DENSENET_TRAINING_PARAMS_JSON)
+    if loaded:
+        return loaded
+    return {
+        "dense_units": 128,
+        "dropout_rate": 0.4,
+        "l2_strength": 1e-4,
+        "head_depth": 1,
+    }
+
+
+def _params_for_efficientnet() -> Dict[str, Any]:
+    loaded = _load_training_params_json(_EFFICIENTNET_TRAINING_PARAMS_JSON)
+    if loaded:
+        return loaded
+    return {"dropout_rate": EFFICIENTNET_DROPOUT}
+
+
 def build_mobilenet_classifier() -> tf.keras.Model:
-    p = _params_for_classifier()
-    backbone = MobileNetV3Large(
-        input_shape=(IMG_SIZE, IMG_SIZE, 3),
-        include_top=False,
-        weights=None,
-        pooling=None,
-        include_preprocessing=True,
-        minimalistic=False,
-        alpha=1.0,
-    )
-    backbone.trainable = False
-    reg = tf.keras.regularizers.l2(float(p.get("l2_strength", 1e-4)))
-    inputs = tf.keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3))
-    x = backbone(inputs, training=False)
-    x = tf.keras.layers.GlobalAveragePooling2D()(x)
-    x = tf.keras.layers.BatchNormalization()(x)
-    x = tf.keras.layers.Dropout(float(p.get("dropout_rate", 0.4)))(x)
-    x = tf.keras.layers.Dense(
-        int(p.get("dense_units", 128)),
-        activation="relu",
-        kernel_regularizer=reg,
-    )(x)
-    x = tf.keras.layers.BatchNormalization()(x)
-    x = tf.keras.layers.Dropout(float(p.get("dropout_rate", 0.4)))(x)
-    out = tf.keras.layers.Dense(1, activation="sigmoid")(x)
-    return tf.keras.Model(inputs, out)
+    return build_mobilenet_classifier_with_params(_params_for_classifier())
 
 
 def build_mobilenet_classifier_with_params(params: Dict[str, Any]) -> tf.keras.Model:
+    """Match mobilenet_prog_final / mob_holdout training graph (named head layers, head_depth)."""
     p = dict(params)
+    dense_units = int(p.get("dense_units", 128))
+    dropout_rate = float(p.get("dropout_rate", 0.4))
+    l2_strength = float(p.get("l2_strength", 1e-4))
+    head_depth = int(p.get("head_depth", 1))
+
     backbone = MobileNetV3Large(
         input_shape=(IMG_SIZE, IMG_SIZE, 3),
         include_top=False,
@@ -181,59 +208,57 @@ def build_mobilenet_classifier_with_params(params: Dict[str, Any]) -> tf.keras.M
         alpha=1.0,
     )
     backbone.trainable = False
-    reg = tf.keras.regularizers.l2(float(p.get("l2_strength", 1e-4)))
-    inputs = tf.keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3))
+    reg = tf.keras.regularizers.l2(l2_strength)
+    inputs = tf.keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3), name="image_input", dtype=tf.float32)
     x = backbone(inputs, training=False)
-    x = tf.keras.layers.GlobalAveragePooling2D()(x)
-    x = tf.keras.layers.BatchNormalization()(x)
-    x = tf.keras.layers.Dropout(float(p.get("dropout_rate", 0.4)))(x)
+    x = tf.keras.layers.GlobalAveragePooling2D(name="global_pool")(x)
+    x = tf.keras.layers.BatchNormalization(name="head_bn")(x)
+    x = tf.keras.layers.Dropout(dropout_rate, name="head_dropout_1")(x)
     x = tf.keras.layers.Dense(
-        int(p.get("dense_units", 128)),
+        dense_units,
         activation="relu",
         kernel_regularizer=reg,
+        name="head_dense_1",
     )(x)
-    x = tf.keras.layers.BatchNormalization()(x)
-    x = tf.keras.layers.Dropout(float(p.get("dropout_rate", 0.4)))(x)
-    out = tf.keras.layers.Dense(1, activation="sigmoid")(x)
-    return tf.keras.Model(inputs, out)
+    if head_depth >= 2:
+        x = tf.keras.layers.Dropout(dropout_rate, name="head_dropout_2")(x)
+        x = tf.keras.layers.Dense(
+            max(32, dense_units // 2),
+            activation="relu",
+            kernel_regularizer=reg,
+            name="head_dense_2",
+        )(x)
+    x = tf.keras.layers.Dropout(dropout_rate, name="head_dropout_final")(x)
+    outputs = tf.keras.layers.Dense(1, activation="sigmoid", dtype="float32", name="tb_output")(x)
+    return tf.keras.Model(inputs, outputs, name="mobilenet_tb_classifier")
 
 
 def build_efficientnet_classifier() -> tf.keras.Model:
-    data_augmentation = tf.keras.Sequential([tf.keras.layers.RandomFlip("horizontal")])
-    base = EfficientNetB2(
+    return build_efficientnet_classifier_with_params(_params_for_efficientnet())
+
+
+def build_efficientnet_classifier_with_params(params: Dict[str, Any]) -> tf.keras.Model:
+    """Match efficientnet_prog_final training graph (Functional API, named head layers)."""
+    p = dict(params)
+    dropout_rate = float(p.get("dropout_rate", EFFICIENTNET_DROPOUT))
+    backbone = EfficientNetB2(
         input_shape=(260, 260, 3),
         include_top=False,
-        weights="imagenet",
+        weights=None,
+        pooling=None,
     )
-    base.trainable = False
-    model = tf.keras.Sequential(
-        [
-            tf.keras.layers.Input(shape=(260, 260, 3)),
-            data_augmentation,
-            base,
-            tf.keras.layers.GlobalAveragePooling2D(),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dropout(EFFICIENTNET_DROPOUT),
-            tf.keras.layers.Dense(1, activation="sigmoid"),
-        ]
-    )
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=EFFICIENTNET_LR_HEAD),
-        loss="binary_crossentropy",
-        metrics=["accuracy", tf.keras.metrics.AUC(name="auc")],
-    )
-    return model
+    backbone.trainable = False
+    inputs = tf.keras.Input(shape=(260, 260, 3), name="image_input", dtype=tf.float32)
+    x = backbone(inputs, training=False)
+    x = tf.keras.layers.GlobalAveragePooling2D(name="global_pool")(x)
+    x = tf.keras.layers.BatchNormalization(name="head_bn")(x)
+    x = tf.keras.layers.Dropout(dropout_rate, name="head_dropout")(x)
+    outputs = tf.keras.layers.Dense(1, activation="sigmoid", dtype="float32", name="tb_output")(x)
+    return tf.keras.Model(inputs, outputs, name="efficientnetb2_tb_classifier")
 
 
 def build_densenet_classifier() -> tf.keras.Model:
-    return build_densenet_classifier_with_params(
-        {
-            "dense_units": 128,
-            "dropout_rate": 0.4,
-            "l2_strength": 1e-4,
-            "head_depth": 1,
-        }
-    )
+    return build_densenet_classifier_with_params(_params_for_densenet())
 
 
 def build_densenet_classifier_with_params(params: Dict[str, Any]) -> tf.keras.Model:
@@ -245,7 +270,7 @@ def build_densenet_classifier_with_params(params: Dict[str, Any]) -> tf.keras.Mo
     base = DenseNet121(
         input_shape=(256, 256, 3),
         include_top=False,
-        weights="imagenet",
+        weights=None,
         pooling=None,
     )
     base.trainable = False
@@ -273,23 +298,85 @@ def build_densenet_classifier_with_params(params: Dict[str, Any]) -> tf.keras.Mo
     return tf.keras.Model(inputs, outputs, name="densenet121_tb_classifier")
 
 
+# Holdout checkpoints (final train/val split) use a fixed name instead of fold_N.
+DENSENET_HOLDOUT_NAMES = (
+    "dense_holdout_best.weights.h5",
+    "dense_holdout_phase2_best.weights.h5",
+    "dense_holdout_phase1_best.weights.h5",
+)
+MOBILENET_HOLDOUT_NAMES = (
+    "mob_holdout_best.weights.h5",
+    "mob_holdout_phase2_best.weights.h5",
+    "mob_holdout_phase1_best.weights.h5",
+    "mobile_holdout_weights.weights.h5",
+    "mobilenet_holdout_weights.weights.h5",
+    "mobile_holdout_best.weights.h5",
+    "mobilenet_holdout_best.weights.h5",
+)
+EFFICIENTNET_HOLDOUT_NAMES = (
+    "eff_holdout_best.weights.h5",
+    "eff_holdout_phase2_best.weights.h5",
+    "eff_holdout_phase1_best.weights.h5",
+    "eff_holdout_best_rebuilt.weights.h5",
+    "holdout_phase2_best.weights.h5",
+    "holdout_best.weights.h5",
+    "holdout_best_rebuilt.weights.h5",
+    "holdout_phase1_best.weights.h5",
+)
+
+
+def _holdout_weights_dir() -> Optional[Path]:
+    raw = os.environ.get("CHEXIT_HOLDOUT_WEIGHTS_DIR", "").strip()
+    return Path(raw).expanduser().resolve() if raw else None
+
+
+def _explicit_weight_path(env_name: str) -> Optional[Path]:
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"{env_name} is set but file not found: {path}")
+    return path
+
+
 def _resolve_weight_path(
     weights_dir: Path,
     primary_pattern: str,
     *,
     fold: int,
     fallback_pattern: Optional[str] = None,
+    holdout_names: Optional[Sequence[str]] = None,
+    env_var: Optional[str] = None,
 ) -> Path:
-    candidates: List[Path] = [weights_dir / primary_pattern.format(fold=fold)]
+    if env_var:
+        explicit = _explicit_weight_path(env_var)
+        if explicit is not None:
+            return explicit
+
+    candidates: List[Path] = []
+    search_dirs: List[Path] = []
+    holdout_dir = _holdout_weights_dir()
+    if holdout_dir is not None:
+        search_dirs.append(holdout_dir)
+    search_dirs.append(weights_dir)
+
+    if holdout_names:
+        for directory in search_dirs:
+            for name in holdout_names:
+                candidates.append(directory / name)
+
+    candidates.append(weights_dir / primary_pattern.format(fold=fold))
     if fold >= 1:
         candidates.append(weights_dir / primary_pattern.format(fold=fold - 1))
     if fallback_pattern:
         candidates.append(weights_dir / fallback_pattern.format(fold=fold))
         if fold >= 1:
             candidates.append(weights_dir / fallback_pattern.format(fold=fold - 1))
-    for p in candidates:
-        if p.is_file():
-            return p
+
+    for path in candidates:
+        if path.is_file():
+            return path
     tried = ", ".join(str(p) for p in candidates)
     raise FileNotFoundError(f"No matching weights found (tried: {tried})")
 
@@ -311,36 +398,48 @@ def get_mobilenet() -> tf.keras.Model:
             "fold_{fold}_weights.weights.h5",
             fold=ENSEMBLE_FOLD,
             fallback_pattern="fold_{fold}_best_val_auc.weights.h5",
+            holdout_names=MOBILENET_HOLDOUT_NAMES,
+            env_var="CHEXIT_MOBILENET_WEIGHTS",
         )
         base_params = _params_for_classifier()
-        # Some checkpoints were trained with different dense_units than current optuna json.
-        dense_candidates: List[int] = []
         configured_dense = int(base_params.get("dense_units", 128))
+        configured_depth = int(base_params.get("head_depth", 1))
+        dense_candidates: List[int] = []
         for v in (configured_dense, 128, 64, 256):
             if v not in dense_candidates:
                 dense_candidates.append(v)
+        depth_candidates: List[int] = []
+        for v in (configured_depth, 1, 2):
+            if v not in depth_candidates:
+                depth_candidates.append(v)
 
         last_err: Optional[Exception] = None
         for dense_units in dense_candidates:
-            try:
-                trial_params = dict(base_params)
-                trial_params["dense_units"] = dense_units
-                model = build_mobilenet_classifier_with_params(trial_params)
-                model.load_weights(str(wpath))
-                _pipeline_log.info(
-                    "Loaded MobileNet weights: %s (dense_units=%d)",
-                    wpath.name,
-                    dense_units,
-                )
-                _mobilenet_model = model
+            for head_depth in depth_candidates:
+                try:
+                    trial_params = dict(base_params)
+                    trial_params["dense_units"] = dense_units
+                    trial_params["head_depth"] = head_depth
+                    model = build_mobilenet_classifier_with_params(trial_params)
+                    model.load_weights(str(wpath))
+                    _pipeline_log.info(
+                        "Loaded MobileNet weights: %s (dense_units=%d, head_depth=%d)",
+                        wpath.name,
+                        dense_units,
+                        head_depth,
+                    )
+                    _mobilenet_model = model
+                    break
+                except Exception as e:
+                    last_err = e
+                    _pipeline_log.warning(
+                        "MobileNet load attempt failed for dense_units=%d head_depth=%d: %s",
+                        dense_units,
+                        head_depth,
+                        e,
+                    )
+            if _mobilenet_model is not None:
                 break
-            except Exception as e:
-                last_err = e
-                _pipeline_log.warning(
-                    "MobileNet load attempt failed for dense_units=%d: %s",
-                    dense_units,
-                    e,
-                )
         if _mobilenet_model is None:
             assert last_err is not None
             raise last_err
@@ -354,11 +453,40 @@ def get_efficientnet() -> tf.keras.Model:
             _EFFICIENTNET_WEIGHTS_DIR,
             "fold_{fold}.weights.h5",
             fold=ENSEMBLE_FOLD,
+            holdout_names=EFFICIENTNET_HOLDOUT_NAMES,
+            env_var="CHEXIT_EFFICIENTNET_WEIGHTS",
         )
-        model = build_efficientnet_classifier()
-        model.load_weights(str(wpath))
-        _pipeline_log.info("Loaded EfficientNet weights: %s", wpath.name)
-        _efficientnet_model = model
+        base_params = _params_for_efficientnet()
+        dropout_candidates: List[float] = []
+        configured = float(base_params.get("dropout_rate", EFFICIENTNET_DROPOUT))
+        for v in (configured, 0.6, 0.4):
+            if v not in dropout_candidates:
+                dropout_candidates.append(v)
+
+        last_err: Optional[Exception] = None
+        for dropout_rate in dropout_candidates:
+            try:
+                trial_params = dict(base_params)
+                trial_params["dropout_rate"] = dropout_rate
+                model = build_efficientnet_classifier_with_params(trial_params)
+                model.load_weights(str(wpath))
+                _pipeline_log.info(
+                    "Loaded EfficientNet weights: %s (dropout_rate=%.2f)",
+                    wpath.name,
+                    dropout_rate,
+                )
+                _efficientnet_model = model
+                break
+            except Exception as e:
+                last_err = e
+                _pipeline_log.warning(
+                    "EfficientNet load attempt failed for dropout_rate=%.2f: %s",
+                    dropout_rate,
+                    e,
+                )
+        if _efficientnet_model is None:
+            assert last_err is not None
+            raise last_err
     return _efficientnet_model
 
 
@@ -370,9 +498,22 @@ def get_densenet() -> tf.keras.Model:
             "fold_{fold}_phase2_best.weights.h5",
             fold=ENSEMBLE_FOLD,
             fallback_pattern="fold_{fold}_best.weights.h5",
+            holdout_names=DENSENET_HOLDOUT_NAMES,
+            env_var="CHEXIT_DENSENET_WEIGHTS",
         )
-        candidate_dense = [512, 256, 128, 64]
-        candidate_head_depth = [1, 2]
+        base_params = _params_for_densenet()
+        configured_dense = int(base_params.get("dense_units", 128))
+        configured_depth = int(base_params.get("head_depth", 1))
+        configured_dropout = float(base_params.get("dropout_rate", 0.4))
+        configured_l2 = float(base_params.get("l2_strength", 1e-4))
+        candidate_dense: List[int] = []
+        for v in (configured_dense, 512, 256, 128, 64):
+            if v not in candidate_dense:
+                candidate_dense.append(v)
+        candidate_head_depth: List[int] = []
+        for v in (configured_depth, 1, 2):
+            if v not in candidate_head_depth:
+                candidate_head_depth.append(v)
         last_err: Optional[Exception] = None
         for dense_units in candidate_dense:
             for head_depth in candidate_head_depth:
@@ -380,8 +521,8 @@ def get_densenet() -> tf.keras.Model:
                     model = build_densenet_classifier_with_params(
                         {
                             "dense_units": dense_units,
-                            "dropout_rate": 0.4,
-                            "l2_strength": 1e-4,
+                            "dropout_rate": configured_dropout,
+                            "l2_strength": configured_l2,
                             "head_depth": head_depth,
                         }
                     )

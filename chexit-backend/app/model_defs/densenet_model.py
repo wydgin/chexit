@@ -1030,6 +1030,21 @@ def _train_single_split(
     return model, y_val, val_proba, threshold, history_meta
 
 
+def _export_holdout_weight_aliases(prefix: str = "dense", fold: int = 0, tag: str = "final_model") -> None:
+    """Copy fold checkpoints to {prefix}_holdout_* names for inference deployment."""
+    exports = [
+        (WEIGHTS_DIR / f"fold_{fold}_{tag}_phase1_best.weights.h5", f"{prefix}_holdout_phase1_best.weights.h5"),
+        (WEIGHTS_DIR / f"fold_{fold}_{tag}_phase2_best.weights.h5", f"{prefix}_holdout_phase2_best.weights.h5"),
+        (WEIGHTS_DIR / f"fold_{fold}_best.weights.h5", f"{prefix}_holdout_best.weights.h5"),
+    ]
+    for src, dest_name in exports:
+        if not src.is_file():
+            continue
+        dest = WEIGHTS_DIR / dest_name
+        shutil.copy2(src, dest)
+        print(f"Exported holdout weights: {dest.name}")
+
+
 def _run_heldout_test_protocol(
     df: pd.DataFrame,
     run_optuna: bool,
@@ -1117,6 +1132,7 @@ def _run_heldout_test_protocol(
             f,
             indent=2,
         )
+    _export_holdout_weight_aliases(prefix="dense", fold=0, tag="final_model")
 
 
 def main(

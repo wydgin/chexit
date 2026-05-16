@@ -1,10 +1,11 @@
-DenseNet fold_*.weights.h5 files are not in Git. Copy them here.
+DenseNet .weights.h5 files are not in Git. Copy them here.
 
-Suggested naming:
-- fold_0.weights.h5
-- fold_1.weights.h5
-- fold_2.weights.h5
-- fold_3.weights.h5
-- fold_4.weights.h5
+Holdout (final train/val split) — preferred for deployment:
+- dense_holdout_best.weights.h5 (selected phase by val AUC)
+- dense_holdout_phase2_best.weights.h5
+- dense_holdout_phase1_best.weights.h5
 
-This folder is intended for DenseNet classifier weights.
+Cross-validation folds (legacy):
+- fold_0_phase2_best.weights.h5
+- fold_1_phase2_best.weights.h5
+- fold_0_best.weights.h5

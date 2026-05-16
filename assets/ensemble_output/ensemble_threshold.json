@@ -1,5 +1,6 @@
 {
-  "threshold": 0.5404975535015942,
+  "threshold": 0.5309409244640241,
   "target_sensitivity": 0.9,
-  "meta_model_type": "logistic"
+  "meta_model_type": "logistic",
+  "selected_on_split": "dev_val"
 }

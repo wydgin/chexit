@@ -16,12 +16,15 @@ import Stack from '@mui/material/Stack';
 import LinearProgress from '@mui/material/LinearProgress';
 import CircularProgress from '@mui/material/CircularProgress';
 import Chip from '@mui/material/Chip';
-import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import ChevronLeft from '@mui/icons-material/ChevronLeft';
 import ChevronRight from '@mui/icons-material/ChevronRight';
+import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import FlagOutlinedIcon from '@mui/icons-material/FlagOutlined';
+import ZoomInIcon from '@mui/icons-material/ZoomIn';
+import ZoomOutIcon from '@mui/icons-material/ZoomOut';
 import type { Theme } from '@mui/material/styles';
 import type { PredictUiState } from '../../api/chexit';
 import { fetchLatestUpload, type UploadRecord } from '../../api/chexit';
@@ -41,8 +44,6 @@ type AnomalyFlag = {
 };
 
 type FlagMap = Record<string, AnomalyFlag>;
-
-const FLAG_STORAGE_KEY = 'chexit:anomaly-flags:v1';
 
 const FLAG_CATEGORIES: { id: FlagCategory; label: string }[] = [
   { id: 'false-positive', label: 'False positive' },
@@ -92,34 +93,251 @@ function migrateFlag(raw: unknown): AnomalyFlag | null {
   };
 }
 
-function loadFlags(): FlagMap {
-  if (typeof window === 'undefined') return {};
-  try {
-    const raw = window.localStorage.getItem(FLAG_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object') return {};
-    const out: FlagMap = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      const migrated = migrateFlag(value);
-      if (migrated) out[key] = migrated;
-    }
-    return out;
-  } catch {
-    return {};
-  }
+type ZoomView = 'input' | 'heatmap';
+
+type ImageZoomTriggerProps = {
+  src: string;
+  alt: string;
+  onError?: () => void;
+  onOpen: () => void;
+};
+
+const ImageZoomTrigger = React.memo(function ImageZoomTrigger({
+  src,
+  alt,
+  onError,
+  onOpen,
+}: ImageZoomTriggerProps) {
+  const cardBorder = 'divider';
+  return (
+    <Box
+      component="button"
+      type="button"
+      onClick={onOpen}
+      aria-label={`View full size: ${alt}`}
+      sx={{
+        display: 'block',
+        width: '100%',
+        p: 0,
+        border: 'none',
+        bgcolor: 'transparent',
+        cursor: 'zoom-in',
+        borderRadius: 2,
+        '&:focus-visible': {
+          outline: '2px solid',
+          outlineColor: 'primary.main',
+          outlineOffset: 2,
+        },
+      }}
+    >
+      <Box
+        component="img"
+        src={src}
+        alt={alt}
+        onError={onError}
+        sx={{
+          borderRadius: 2,
+          bgcolor: 'background.default',
+          border: '1px solid',
+          borderColor: cardBorder,
+          width: '100%',
+          maxHeight: { xs: '52vh', md: '62vh' },
+          height: 'auto',
+          objectFit: 'contain',
+          display: 'block',
+          mx: 'auto',
+          pointerEvents: 'none',
+        }}
+      />
+    </Box>
+  );
+});
+
+/** Jet-style legend bar: blue (low) → yellow → red (high). No red at the blue end. */
+function HeatmapLegendBar() {
+  return (
+    <Box
+      aria-hidden
+      sx={{
+        height: 10,
+        borderRadius: 1,
+        border: '1px solid',
+        borderColor: 'divider',
+        background:
+          'linear-gradient(90deg, #1d4ed8 0%, #3b82f6 38%, #facc15 72%, #ef4444 100%)',
+      }}
+    />
+  );
 }
 
-function saveFlagsToStorage(map: FlagMap): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(FLAG_STORAGE_KEY, JSON.stringify(map));
-  } catch {
-    /* localStorage full / disabled — silently ignore in prototype */
-  }
-}
+const HEATMAP_GUIDE_TEXT =
+  'Cooler blue areas received less AI model attention; red and yellow highlight regions that most influenced the TB risk estimate. This is not a diagnosis by itself — use it together with the risk score above.';
 
 /** Empty image slot: glass-style panel for light + dark (replaces solid black placeholders). */
+const RESULTS_GRID_STRETCH_SX = {
+  '& .results-image-column': {
+    boxSizing: 'border-box',
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100%',
+    pb: 2.5,
+  },
+  /* Stretch card chrome to match diagnosis height (with or without an image). */
+  '& .results-image-column .results-image-card': {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minHeight: 0,
+  },
+  /* Real images: center in the tall card. */
+  '& .results-image-column--has-media .results-image-card-content': {
+    display: 'flex',
+    flex: 1,
+    flexDirection: 'column',
+    minHeight: 0,
+  },
+  '& .results-image-column--has-media .results-image-media-slot': {
+    alignItems: 'center',
+    display: 'flex',
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 0,
+  },
+  /* Placeholders: card grows, glass panel keeps its aspect ratio. */
+  '& .results-image-column:not(.results-image-column--has-media) .results-image-card-content': {
+    flex: '0 1 auto',
+  },
+  '& .results-image-column:not(.results-image-column--has-media) .results-image-media-slot': {
+    flex: '0 1 auto',
+  },
+  '& .results-diagnosis-column': {
+    alignItems: 'stretch',
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100%',
+    pb: 2.5,
+  },
+  '& .results-diagnosis-shell': {
+    display: 'flex',
+    flex: 1,
+    flexDirection: 'column',
+    mb: 0,
+    minHeight: 0,
+    position: 'relative',
+    width: '100%',
+  },
+  '& .results-diagnosis-card': {
+    display: 'flex',
+    flex: 1,
+    flexDirection: 'column',
+    minHeight: 0,
+  },
+} as const;
+
+type ResultsImageColumnProps = {
+  gridArea: 'input' | 'heatmap';
+  title: string;
+  subheader: React.ReactNode;
+  hasMedia: boolean;
+  hasBatch: boolean;
+  canGoPrev: boolean;
+  canGoNext: boolean;
+  onGoPrev: () => void;
+  onGoNext: () => void;
+  mediaSrc?: string;
+  mediaAlt: string;
+  onMediaError?: () => void;
+  onOpenZoom: () => void;
+  cardBg: string;
+  cardBorder: string;
+  mutedText: string;
+};
+
+/** Isolated from contributions toggle so expand/collapse does not re-render images. */
+const ResultsImageColumn = React.memo(function ResultsImageColumn({
+  gridArea,
+  title,
+  subheader,
+  hasMedia,
+  hasBatch,
+  canGoPrev,
+  canGoNext,
+  onGoPrev,
+  onGoNext,
+  mediaSrc,
+  mediaAlt,
+  onMediaError,
+  onOpenZoom,
+  cardBg,
+  cardBorder,
+  mutedText,
+}: ResultsImageColumnProps) {
+  return (
+    <Box
+      className={`results-image-column${hasMedia ? ' results-image-column--has-media' : ''}`}
+      sx={{ gridArea, minWidth: 0 }}
+    >
+      <Card
+        className="results-image-card"
+        variant="outlined"
+        sx={{
+          bgcolor: cardBg,
+          borderColor: cardBorder,
+          color: 'text.primary',
+          borderRadius: 2,
+        }}
+      >
+        <CardHeader
+          title={
+            <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+              <Typography component="span" sx={{ fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
+                {title}
+              </Typography>
+              {hasBatch ? (
+                <Stack direction="row" alignItems="center" spacing={0.5} sx={{ flexShrink: 0 }}>
+                  <IconButton size="small" disabled={!canGoPrev} onClick={onGoPrev}>
+                    <ChevronLeft fontSize="small" />
+                  </IconButton>
+                  <IconButton size="small" disabled={!canGoNext} onClick={onGoNext}>
+                    <ChevronRight fontSize="small" />
+                  </IconButton>
+                </Stack>
+              ) : null}
+            </Stack>
+          }
+          subheader={subheader}
+          sx={{
+            pb: 1,
+            '& .MuiCardHeader-content': { minWidth: 0 },
+            '& .MuiCardHeader-title': { width: '100%' },
+            '& .MuiCardHeader-subheader': {
+              color: mutedText,
+              fontSize: 12,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            },
+          }}
+        />
+        <CardContent className="results-image-card-content" sx={{ pt: 1 }}>
+          <Box className="results-image-media-slot" sx={{ width: '100%' }}>
+            {hasMedia && mediaSrc ? (
+              <ImageZoomTrigger
+                src={mediaSrc}
+                alt={mediaAlt}
+                onError={onMediaError}
+                onOpen={onOpenZoom}
+              />
+            ) : (
+              <Box aria-hidden sx={(theme) => liquidGlassImagePlaceholderSx(theme)} />
+            )}
+          </Box>
+        </CardContent>
+      </Card>
+    </Box>
+  );
+});
+
 function liquidGlassImagePlaceholderSx(theme: Theme) {
   return {
     borderRadius: 2,
@@ -306,6 +524,154 @@ export default function Features({
   // const modelRows = pred && riskPct != null
   const modelRows = contributionBars(pred?.model_contributions);
 
+  const [contributionsOpen, setContributionsOpen] = React.useState(false);
+  /** After the contributions panel finishes opening — avoids image cards reflowing mid-animation. */
+  const [contributionsAlignStretch, setContributionsAlignStretch] = React.useState(false);
+  const [zoomOpen, setZoomOpen] = React.useState(false);
+  const [zoomView, setZoomView] = React.useState<ZoomView>('input');
+  const [zoomScale, setZoomScale] = React.useState(1);
+  const zoomTouchStartX = React.useRef<number | null>(null);
+  const zoomContentRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!contributionsOpen) {
+      setContributionsAlignStretch(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setContributionsAlignStretch(true), 280);
+    return () => window.clearTimeout(timer);
+  }, [contributionsOpen]);
+
+  const previewSrcForIndex = React.useCallback(
+    (idx: number) => {
+      const item = predictUi.items[idx];
+      if (item?.localPreviewUrl) return item.localPreviewUrl;
+      if (idx === safeIndex && previewSrc) return previewSrc;
+      return null;
+    },
+    [predictUi.items, safeIndex, previewSrc],
+  );
+
+  const heatmapSrcForIndex = React.useCallback(
+    (idx: number) => {
+      const item = predictUi.items[idx];
+      const b64 = item?.result?.heatmap?.trim() ?? '';
+      if (b64) return `data:image/png;base64,${b64}`;
+      if (idx === safeIndex && heatmapB64) return `data:image/png;base64,${heatmapB64}`;
+      return '';
+    },
+    [predictUi.items, safeIndex, heatmapB64],
+  );
+
+  const zoomInputSrc = previewSrcForIndex(safeIndex);
+  const zoomHeatmapSrc = heatmapSrcForIndex(safeIndex);
+  const zoomDisplaySrc = zoomView === 'input' ? zoomInputSrc : zoomHeatmapSrc;
+  const zoomCanShowHeatmap = Boolean(zoomHeatmapSrc);
+  const zoomCanShowInput = Boolean(zoomInputSrc);
+  const clampZoomScale = React.useCallback(
+    (value: number) => Math.min(3, Math.max(0.5, value)),
+    [],
+  );
+
+  const openZoom = React.useCallback((view: ZoomView) => {
+    setZoomView(view);
+    setZoomScale(1);
+    setZoomOpen(true);
+  }, []);
+
+  const handleOpenInputZoom = React.useCallback(() => openZoom('input'), [openZoom]);
+  const handleOpenHeatmapZoom = React.useCallback(() => openZoom('heatmap'), [openZoom]);
+  const handlePreviewError = React.useCallback(() => setPreviewLoadFailed(true), []);
+  const handleGoPrevImage = React.useCallback(() => {
+    onNavigateIndex?.(safeIndex - 1);
+  }, [onNavigateIndex, safeIndex]);
+  const handleGoNextImage = React.useCallback(() => {
+    onNavigateIndex?.(safeIndex + 1);
+  }, [onNavigateIndex, safeIndex]);
+
+  const closeZoom = React.useCallback(() => {
+    setZoomOpen(false);
+    setZoomScale(1);
+    zoomTouchStartX.current = null;
+  }, []);
+
+  const handleZoomTouchStart = (clientX: number) => {
+    zoomTouchStartX.current = clientX;
+  };
+
+  const handleZoomTouchEnd = (clientX: number) => {
+    const start = zoomTouchStartX.current;
+    zoomTouchStartX.current = null;
+    if (start == null) return;
+    const delta = clientX - start;
+    if (Math.abs(delta) < 48) return;
+
+    if (delta < 0 && zoomView === 'input' && zoomCanShowHeatmap) {
+      setZoomView('heatmap');
+      setZoomScale(1);
+    } else if (delta > 0 && zoomView === 'heatmap' && zoomCanShowInput) {
+      setZoomView('input');
+      setZoomScale(1);
+    }
+  };
+
+  React.useEffect(() => {
+    if (!zoomOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeZoom();
+        return;
+      }
+      if (event.key === 'ArrowLeft' && zoomView === 'heatmap' && zoomCanShowInput) {
+        setZoomView('input');
+        setZoomScale(1);
+      } else if (event.key === 'ArrowRight' && zoomView === 'input' && zoomCanShowHeatmap) {
+        setZoomView('heatmap');
+        setZoomScale(1);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [zoomOpen, zoomView, zoomCanShowInput, zoomCanShowHeatmap, closeZoom]);
+
+  /** Trackpad pinch (ctrl+wheel) and scroll zoom on the dialog — block browser page zoom. */
+  React.useEffect(() => {
+    if (!zoomOpen) return;
+
+    const onWheel = (event: WheelEvent) => {
+      const inDialog = Boolean(
+        (event.target as Element | null)?.closest?.('.MuiDialog-container'),
+      );
+      if (!inDialog) return;
+
+      if (event.ctrlKey) {
+        event.preventDefault();
+        const intensity = 0.012;
+        setZoomScale((prev) => clampZoomScale(prev - event.deltaY * intensity));
+        return;
+      }
+
+      const inImageArea = zoomContentRef.current?.contains(event.target as Node);
+      if (!inImageArea) return;
+
+      event.preventDefault();
+      setZoomScale((prev) => clampZoomScale(prev - event.deltaY * 0.0025));
+    };
+
+    document.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    return () => document.removeEventListener('wheel', onWheel, { capture: true });
+  }, [zoomOpen, clampZoomScale]);
+
+  React.useEffect(() => {
+    if (!zoomOpen) return;
+    if (zoomView === 'heatmap' && !zoomCanShowHeatmap && zoomCanShowInput) {
+      setZoomView('input');
+    }
+    if (zoomView === 'input' && !zoomCanShowInput && zoomCanShowHeatmap) {
+      setZoomView('heatmap');
+    }
+  }, [zoomOpen, zoomView, zoomCanShowHeatmap, zoomCanShowInput, safeIndex]);
+
   React.useEffect(() => {
     if (!hasBatch || !onNavigateIndex) {
       return;
@@ -328,7 +694,8 @@ export default function Features({
   const currentFlagKey: string | null = pred
     ? (selectedItem?.fileName ?? latestUpload?.fileName ?? null)
     : null;
-  const [flags, setFlags] = React.useState<FlagMap>(() => loadFlags());
+  /** In-memory only — cleared on page refresh (no localStorage persistence). */
+  const [flags, setFlags] = React.useState<FlagMap>({});
   const [flagFormOpen, setFlagFormOpen] = React.useState(false);
   const [flagFormCategories, setFlagFormCategories] = React.useState<FlagCategory[]>([]);
   const [flagFormNote, setFlagFormNote] = React.useState('');
@@ -379,7 +746,6 @@ export default function Features({
       },
     };
     setFlags(next);
-    saveFlagsToStorage(next);
     setFlagFormOpen(false);
   }, [
     currentFlagKey,
@@ -399,7 +765,6 @@ export default function Features({
       const next = { ...flags };
       delete next[key];
       setFlags(next);
-      saveFlagsToStorage(next);
       if (key === currentFlagKey) {
         setFlagFormOpen(false);
       }
@@ -440,127 +805,70 @@ export default function Features({
         </Stack>
 
         <Box
+          data-stretch={contributionsAlignStretch ? '' : undefined}
           sx={{
-            display: 'flex',
-            flexDirection: { xs: 'column', md: 'row' },
+            display: 'grid',
             gap: { xs: 2.5, md: 3 },
-            alignItems: 'stretch',
+            alignItems: 'start',
+            gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr minmax(300px, 380px)' },
+            gridTemplateAreas: {
+              xs: `
+                "input"
+                "heatmap"
+                "diagnosis"
+              `,
+              lg: `"input heatmap diagnosis"`,
+            },
+            '&[data-stretch]': {
+              alignItems: 'stretch',
+              ...RESULTS_GRID_STRETCH_SX,
+            },
+            '&:not([data-stretch]) .results-diagnosis-shell': {
+              mb: 2.5,
+            },
+            '&:not([data-stretch]) .results-diagnosis-column': {
+              alignItems: 'center',
+            },
           }}
         >
-          {/* Input image */}
-          <Card
-            variant="outlined"
+          <ResultsImageColumn
+            gridArea="input"
+            title="Input X-Ray"
+            subheader={previewSubheader}
+            hasMedia={Boolean(showPreview && previewSrc)}
+            hasBatch={hasBatch}
+            canGoPrev={canGoPrev}
+            canGoNext={canGoNext}
+            onGoPrev={handleGoPrevImage}
+            onGoNext={handleGoNextImage}
+            mediaSrc={previewSrc ?? undefined}
+            mediaAlt="Input chest X-ray"
+            onMediaError={handlePreviewError}
+            onOpenZoom={handleOpenInputZoom}
+            cardBg={cardBg}
+            cardBorder={cardBorder}
+            mutedText={mutedText}
+          />
+          {/* Diagnosis — right column on desktop (+ contributions extension below) */}
+          <Box className="results-diagnosis-column" sx={{ gridArea: 'diagnosis', minWidth: 0 }}>
+          <Box className="results-diagnosis-shell">
+          <Box
+            className="results-diagnosis-card"
             sx={{
-              flex: 1,
-              // Critical: lets the flex item shrink below its content's intrinsic
-              // width so long DICOM UID filenames in the subheader wrap inside
-              // the card instead of pushing the layout (and the chevrons) out.
-              minWidth: 0,
-              bgcolor: cardBg,
+              width: '100%',
+              border: '1px solid',
               borderColor: cardBorder,
-              color: 'text.primary',
               borderRadius: 2,
+              bgcolor: cardBg,
+              color: 'text.primary',
+              overflow: 'visible',
             }}
           >
-            <CardHeader
-              title={
-                <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
-                  <Typography
-                    component="span"
-                    sx={{ fontSize: 14, fontWeight: 600, flexShrink: 0 }}
-                  >
-                    Input X-Ray
-                  </Typography>
-                  {hasBatch ? (
-                    <Stack
-                      direction="row"
-                      alignItems="center"
-                      spacing={0.5}
-                      sx={{ flexShrink: 0 }}
-                    >
-                      <IconButton
-                        size="small"
-                        disabled={!canGoPrev}
-                        onClick={() => onNavigateIndex?.(safeIndex - 1)}
-                      >
-                        <ChevronLeft fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        size="small"
-                        disabled={!canGoNext}
-                        onClick={() => onNavigateIndex?.(safeIndex + 1)}
-                      >
-                        <ChevronRight fontSize="small" />
-                      </IconButton>
-                    </Stack>
-                  ) : null}
-                </Stack>
-              }
-              subheader={previewSubheader}
-              sx={{
-                pb: 1,
-                // Lets the content column shrink so long DICOM UIDs wrap inside
-                // the card instead of stretching it out.
-                '& .MuiCardHeader-content': {
-                  minWidth: 0,
-                },
-                '& .MuiCardHeader-title': {
-                  width: '100%',
-                },
-                '& .MuiCardHeader-subheader': {
-                  color: mutedText,
-                  fontSize: 12,
-                  // Keep the filename inline with "Image N of M". Long DICOM
-                  // UIDs are already middle-truncated to ~30 chars upstream;
-                  // this is the belt-and-suspenders fallback if a card is
-                  // narrower than expected.
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                },
-              }}
-            />
-            <CardContent sx={{ pt: 1 }}>
-              {showPreview ? (
-                <Box
-                  component="img"
-                  key={previewSrc}
-                  src={previewSrc ?? undefined}
-                  alt="Input chest X-ray"
-                  onError={() => setPreviewLoadFailed(true)}
-                  sx={{
-                    borderRadius: 2,
-                    bgcolor: 'background.default',
-                    border: '1px solid',
-                    borderColor: cardBorder,
-                    width: '100%',
-                    maxHeight: { xs: '52vh', md: '62vh' },
-                    height: 'auto',
-                    objectFit: 'contain',
-                    display: 'block',
-                    mx: 'auto',
-                  }}
-                />
-              ) : (
-                <Box aria-hidden sx={(theme) => liquidGlassImagePlaceholderSx(theme)} />
-              )}
-            </CardContent>
-          </Card>
-{/* Diagnosis */}
-          <Card
-            variant="outlined"
-            sx={{
-              flex: 1.1,
-              minWidth: 0,
-              bgcolor: cardBg,
-              borderColor: cardBorder,
-              color: 'text.primary',
-              borderRadius: 2,
-            }}
-          >
-  <CardContent
+  <Box
     sx={{
-      pb: 2,
+      px: 2,
+      pt: 2,
+      pb: 3,
       display: 'flex',
       flexDirection: 'column',
       gap: 3, // uniform vertical spacing between blocks
@@ -643,8 +951,17 @@ export default function Features({
             '—'
           )}
         </Typography>
-        <Typography variant="caption" sx={{ color: mutedText, display: 'block', mt: 1 }}>
-          {pred ? 'Estimated TB probability from the screening model.' : 'Run Analyze on a chest X-ray to see results.'}
+        {pred && !predictUi.loading ? (
+          <Typography variant="caption" sx={{ color: mutedText, display: 'block', mt: 1 }}>
+            Estimated TB probability from the screening model.
+          </Typography>
+        ) : null}
+      </Box>
+
+      <Box sx={{ mt: 2.5 }}>
+        <HeatmapLegendBar />
+        <Typography variant="caption" sx={{ color: mutedText, display: 'block', mt: 1, lineHeight: 1.45 }}>
+          {HEATMAP_GUIDE_TEXT}
         </Typography>
       </Box>
     </Box>
@@ -846,140 +1163,292 @@ export default function Features({
       </Box>
     ) : null}
 
-    {/* Bottom: contributions (pulled closer to 70%) */}
-    <Box>
-                <Divider sx={{ borderColor: cardBorder, mb: 3 }} />
+  </Box>
 
-      <Typography
-        variant="subtitle2"
-        sx={{ color: mutedText, mb: 1.5 }}
-      >
-        Model contributions
-      </Typography>
+            <Box sx={{ position: 'relative', height: 0, zIndex: 2 }}>
+              <Box
+                aria-hidden
+                sx={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  height: '1px',
+                  pointerEvents: 'none',
+                  transform: 'translateY(-50%)',
+                  opacity: contributionsOpen ? 1 : 0,
+                  transition: 'opacity 280ms cubic-bezier(0.4, 0, 0.2, 1)',
+                  background: (theme) =>
+                    `linear-gradient(90deg, transparent 0%, ${theme.palette.divider} 16%, ${theme.palette.divider} 50%, ${theme.palette.divider} 84%, transparent 100%)`,
+                }}
+              />
+              <IconButton
+                size="small"
+                aria-label={contributionsOpen ? 'Hide model contributions' : 'Show model contributions'}
+                aria-expanded={contributionsOpen}
+                onClick={() => {
+                if (contributionsOpen) {
+                  setContributionsAlignStretch(false);
+                }
+                setContributionsOpen((open) => !open);
+              }}
+                sx={{
+                  position: 'absolute',
+                  left: '50%',
+                  top: 0,
+                  width: 32,
+                  height: 32,
+                  p: 0,
+                  borderRadius: '50%',
+                  border: '1px solid',
+                  borderColor: cardBorder,
+                  bgcolor: cardBg,
+                  boxShadow: '0 2px 8px rgba(15, 23, 42, 0.12)',
+                  transition: 'transform 180ms ease',
+                  transform: contributionsOpen
+                    ? 'translate(-50%, -50%) rotate(180deg)'
+                    : 'translate(-50%, -50%)',
+                  '&:hover': { bgcolor: 'action.hover' },
+                }}
+              >
+                <ExpandMoreIcon fontSize="small" />
+              </IconButton>
+            </Box>
 
-      {modelRows.map((item) => (
-        <Box key={item.label} sx={{ mb: 1.5 }}>
-          <Stack
-            direction="row"
-            justifyContent="space-between"
-            sx={{ mb: 0.5 }}
-          >
-            <Typography variant="body2">{item.label}</Typography>
-            <Typography variant="body2" sx={{ color: mutedText }}>
-              {item.value}%
-            </Typography>
-          </Stack>
-                    <LinearProgress
-                      variant="determinate"
-                      value={item.value}
-                      sx={{
-                        height: 6,
-                        borderRadius: 3,
-                        bgcolor: 'action.hover',
-                        '& .MuiLinearProgress-bar': {
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateRows: contributionsOpen ? '1fr' : '0fr',
+                transition: 'grid-template-rows 280ms cubic-bezier(0.4, 0, 0.2, 1)',
+              }}
+            >
+              <Box sx={{ overflow: 'hidden', minHeight: 0 }}>
+                <Box sx={{ px: 2, pb: 2, pt: 3.5 }}>
+                  <Typography
+                    variant="subtitle1"
+                    sx={{ color: mutedText, mb: 1.5, fontWeight: 600, fontSize: '1rem' }}
+                  >
+                    Model contributions
+                  </Typography>
+                  {modelRows.map((item) => (
+                    <Box key={item.label} sx={{ mb: 1.5 }}>
+                      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+                        <Typography variant="body2">{item.label}</Typography>
+                        <Typography variant="body2" sx={{ color: mutedText }}>
+                          {item.value}%
+                        </Typography>
+                      </Stack>
+                      <LinearProgress
+                        variant="determinate"
+                        value={item.value}
+                        sx={{
+                          height: 6,
                           borderRadius: 3,
-                          bgcolor: item.barColor,
-                        },
-                      }}
-                    />
+                          bgcolor: 'action.hover',
+                          '& .MuiLinearProgress-bar': {
+                            borderRadius: 3,
+                            bgcolor: item.barColor,
+                          },
+                        }}
+                      />
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+            </Box>
+          </Box>
+          </Box>
+          </Box>
+
+
+
+          <ResultsImageColumn
+            gridArea="heatmap"
+            title="Prediction Heat Map"
+            subheader="Highlighted TB-suspect regions"
+            hasMedia={hasHeatmap}
+            hasBatch={hasBatch}
+            canGoPrev={canGoPrev}
+            canGoNext={canGoNext}
+            onGoPrev={handleGoPrevImage}
+            onGoNext={handleGoNextImage}
+            mediaSrc={hasHeatmap ? heatmapSrc : undefined}
+            mediaAlt="Saliency overlay on input study"
+            onOpenZoom={handleOpenHeatmapZoom}
+            cardBg={cardBg}
+            cardBorder={cardBorder}
+            mutedText={mutedText}
+          />
         </Box>
-      ))}
-    </Box>
-  </CardContent>
-</Card>
-
-
-
-          {/* Heatmap */}
-          <Card
-            variant="outlined"
+        <Dialog
+          open={zoomOpen}
+          onClose={closeZoom}
+          maxWidth={false}
+          PaperProps={{
+            sx: {
+              bgcolor: 'background.default',
+              maxWidth: 'min(96vw, 1200px)',
+              width: '96vw',
+              m: 1,
+            },
+          }}
+        >
+          <DialogTitle sx={{ py: 1, pr: 1 }}>
+            <Stack
+              direction={{ xs: 'column', sm: 'row' }}
+              alignItems={{ xs: 'stretch', sm: 'center' }}
+              justifyContent="space-between"
+              spacing={1}
+            >
+              <Box sx={{ minWidth: 0 }}>
+                <Typography variant="subtitle2">
+                  {zoomView === 'input' ? 'Input X-Ray' : 'Prediction heat map'}
+                </Typography>
+                <Typography variant="caption" sx={{ color: mutedText }}>
+                  {zoomCanShowInput && zoomCanShowHeatmap
+                    ? 'Swipe or arrow keys: X-ray ↔ heat map. Pinch or scroll on the image to zoom.'
+                    : 'Pinch or scroll on the image to zoom.'}
+                </Typography>
+              </Box>
+              <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="flex-end">
+                {zoomCanShowInput && zoomCanShowHeatmap ? (
+                  <Stack direction="row" spacing={0.5}>
+                    <Button
+                      size="small"
+                      variant={zoomView === 'input' ? 'contained' : 'outlined'}
+                      onClick={() => {
+                        setZoomView('input');
+                        setZoomScale(1);
+                      }}
+                    >
+                      X-ray
+                    </Button>
+                    <Button
+                      size="small"
+                      variant={zoomView === 'heatmap' ? 'contained' : 'outlined'}
+                      onClick={() => {
+                        setZoomView('heatmap');
+                        setZoomScale(1);
+                      }}
+                    >
+                      Heat map
+                    </Button>
+                  </Stack>
+                ) : null}
+                <IconButton
+                  size="small"
+                  onClick={() => setZoomScale((s) => clampZoomScale(s - 0.25))}
+                  aria-label="Zoom out"
+                  disabled={zoomScale <= 0.5}
+                >
+                  <ZoomOutIcon fontSize="small" />
+                </IconButton>
+                <Typography variant="caption" sx={{ minWidth: 40, textAlign: 'center' }}>
+                  {Math.round(zoomScale * 100)}%
+                </Typography>
+                <IconButton
+                  size="small"
+                  onClick={() => setZoomScale((s) => clampZoomScale(s + 0.25))}
+                  aria-label="Zoom in"
+                  disabled={zoomScale >= 3}
+                >
+                  <ZoomInIcon fontSize="small" />
+                </IconButton>
+                <IconButton size="small" onClick={closeZoom} aria-label="Close">
+                  <CloseIcon fontSize="small" />
+                </IconButton>
+              </Stack>
+            </Stack>
+          </DialogTitle>
+          <DialogContent
+            ref={zoomContentRef}
+            dividers
+            onTouchStart={(e) => {
+              const touch = e.touches[0];
+              if (touch) handleZoomTouchStart(touch.clientX);
+            }}
+            onTouchEnd={(e) => {
+              const touch = e.changedTouches[0];
+              if (touch) handleZoomTouchEnd(touch.clientX);
+            }}
             sx={{
-              flex: 1,
-              minWidth: 0,
-              bgcolor: cardBg,
-              borderColor: cardBorder,
-              color: 'text.primary',
-              borderRadius: 2,
+              overflow: 'auto',
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'flex-start',
+              minHeight: 280,
+              maxHeight: '80vh',
+              position: 'relative',
+              touchAction: 'none',
+              overscrollBehavior: 'contain',
             }}
           >
-            <CardHeader
-              title={
-                <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
-                  <Typography
-                    component="span"
-                    sx={{ fontSize: 14, fontWeight: 600, flexShrink: 0 }}
-                  >
-                    Prediction Heat Map
-                  </Typography>
-                  {hasBatch ? (
-                    <Stack
-                      direction="row"
-                      alignItems="center"
-                      spacing={0.5}
-                      sx={{ flexShrink: 0 }}
-                    >
-                      <IconButton
-                        size="small"
-                        disabled={!canGoPrev}
-                        onClick={() => onNavigateIndex?.(safeIndex - 1)}
-                      >
-                        <ChevronLeft fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        size="small"
-                        disabled={!canGoNext}
-                        onClick={() => onNavigateIndex?.(safeIndex + 1)}
-                      >
-                        <ChevronRight fontSize="small" />
-                      </IconButton>
-                    </Stack>
-                  ) : null}
-                </Stack>
-              }
-              subheader="Highlighted TB-suspect regions"
-              sx={{
-                pb: 1,
-                '& .MuiCardHeader-content': {
-                  minWidth: 0,
-                },
-                '& .MuiCardHeader-title': {
-                  width: '100%',
-                },
-                '& .MuiCardHeader-subheader': {
-                  color: mutedText,
-                  fontSize: 12,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                },
-              }}
-            />
-            <CardContent sx={{ pt: 1 }}>
-              {hasHeatmap ? (
-                <Box
-                  component="img"
-                  key={`${analysisVersionKey}|${heatmapSrc.slice(0, 64)}`}
-                  src={heatmapSrc}
-                  alt="Saliency overlay on input study"
-                  sx={{
-                    borderRadius: 2,
-                    width: '100%',
-                    maxHeight: { xs: '52vh', md: '62vh' },
-                    height: 'auto',
-                    border: '1px solid',
-                    borderColor: cardBorder,
-                    objectFit: 'contain',
-                    display: 'block',
-                    mx: 'auto',
-                    bgcolor: 'background.default',
-                  }}
-                />
-              ) : (
-                <Box aria-hidden sx={(theme) => liquidGlassImagePlaceholderSx(theme)} />
-              )}
-            </CardContent>
-          </Card>
-        </Box>
+            {zoomCanShowInput && zoomCanShowHeatmap ? (
+              <IconButton
+                sx={{
+                  position: 'absolute',
+                  left: 8,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  bgcolor: 'background.paper',
+                  boxShadow: 1,
+                  visibility: zoomView === 'heatmap' ? 'visible' : 'hidden',
+                  pointerEvents: zoomView === 'heatmap' ? 'auto' : 'none',
+                }}
+                onClick={() => {
+                  setZoomView('input');
+                  setZoomScale(1);
+                }}
+                aria-label="Show X-ray"
+              >
+                <ChevronLeft />
+              </IconButton>
+            ) : null}
+            {zoomDisplaySrc ? (
+              <Box
+                component="img"
+                src={zoomDisplaySrc}
+                alt={zoomView === 'input' ? 'Input chest X-ray' : 'Heat map overlay'}
+                draggable={false}
+                sx={{
+                  transform: `scale(${zoomScale})`,
+                  transformOrigin: 'center center',
+                  transition: 'transform 80ms ease-out',
+                  maxWidth: '100%',
+                  maxHeight: '75vh',
+                  height: 'auto',
+                  objectFit: 'contain',
+                }}
+              />
+            ) : (
+              <Typography variant="body2" sx={{ color: mutedText, py: 6 }}>
+                No image available for this view.
+              </Typography>
+            )}
+            {zoomCanShowInput && zoomCanShowHeatmap ? (
+              <IconButton
+                sx={{
+                  position: 'absolute',
+                  right: 8,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  bgcolor: 'background.paper',
+                  boxShadow: 1,
+                  visibility: zoomView === 'input' ? 'visible' : 'hidden',
+                  pointerEvents: zoomView === 'input' ? 'auto' : 'none',
+                }}
+                onClick={() => {
+                  setZoomView('heatmap');
+                  setZoomScale(1);
+                }}
+                aria-label="Show heat map"
+              >
+                <ChevronRight />
+              </IconButton>
+            ) : null}
+          </DialogContent>
+        </Dialog>
+
         <Dialog open={logOpen} onClose={() => setLogOpen(false)} fullWidth maxWidth="sm">
           <DialogTitle>Anomaly log ({flagCount})</DialogTitle>
           <DialogContent dividers>

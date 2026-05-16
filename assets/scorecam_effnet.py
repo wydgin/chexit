@@ -24,6 +24,10 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent / "chexit-backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from app.chexit_inference import (
+    build_efficientnet_classifier_with_params,
+    _params_for_efficientnet,
+)
 from app.explainability.fast_scorecam import compute_fast_scorecam
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -36,22 +40,7 @@ _PREDICTOR_CACHE: Dict[str, "EfficientNetScoreCamPredictor"] = {}
 
 
 def build_efficientnet_model() -> tf.keras.Model:
-    data_augmentation = tf.keras.Sequential([tf.keras.layers.RandomFlip("horizontal")])
-    base_model = tf.keras.applications.EfficientNetB2(
-        input_shape=(IMG_SIZE, IMG_SIZE, 3), include_top=False, weights=None
-    )
-    model = tf.keras.Sequential(
-        [
-            tf.keras.layers.Input(shape=(IMG_SIZE, IMG_SIZE, 3)),
-            data_augmentation,
-            base_model,
-            tf.keras.layers.GlobalAveragePooling2D(),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dropout(0.6),
-            tf.keras.layers.Dense(1, activation="sigmoid"),
-        ]
-    )
-    return model
+    return build_efficientnet_classifier_with_params(_params_for_efficientnet())
 
 
 @dataclass
@@ -189,7 +178,13 @@ def generate_scorecam_heatmap(
 ) -> EfficientNetScoreCamResult:
     if predictor is None:
         resolved_weights = (
-            Path(weights_path) if weights_path else (WEIGHTS_DIR / "fold_0.weights.h5")
+            Path(weights_path)
+            if weights_path
+            else (
+                WEIGHTS_DIR / "eff_holdout_phase2_best.weights.h5"
+                if (WEIGHTS_DIR / "eff_holdout_phase2_best.weights.h5").is_file()
+                else WEIGHTS_DIR / "fold_0.weights.h5"
+            )
         )
         if use_cache:
             predictor = get_cached_predictor(
@@ -221,7 +216,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, help="Output heatmap image path.")
     parser.add_argument(
         "--weights",
-        default=str(WEIGHTS_DIR / "fold_0.weights.h5"),
+        default=str(
+            WEIGHTS_DIR / "eff_holdout_phase2_best.weights.h5"
+            if (WEIGHTS_DIR / "eff_holdout_phase2_best.weights.h5").is_file()
+            else WEIGHTS_DIR / "fold_0.weights.h5"
+        ),
         help="Model weights path.",
     )
     parser.add_argument(
