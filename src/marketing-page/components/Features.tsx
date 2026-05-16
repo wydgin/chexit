@@ -53,44 +53,8 @@ const FLAG_CATEGORIES: { id: FlagCategory; label: string }[] = [
   { id: 'other', label: 'Other' },
 ];
 
-const FLAG_CATEGORY_IDS = FLAG_CATEGORIES.map((c) => c.id);
-
 function categoryLabel(id: FlagCategory): string {
   return FLAG_CATEGORIES.find((c) => c.id === id)?.label ?? id;
-}
-
-function isFlagCategory(value: unknown): value is FlagCategory {
-  return typeof value === 'string' && (FLAG_CATEGORY_IDS as readonly string[]).includes(value);
-}
-
-/** Accept new schema (`categories[]`) and the legacy single-`category` shape side-by-side. */
-function migrateFlag(raw: unknown): AnomalyFlag | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const f = raw as Record<string, unknown>;
-  let categories: FlagCategory[] = [];
-  if (Array.isArray(f.categories)) {
-    categories = f.categories.filter(isFlagCategory);
-  } else if (isFlagCategory(f.category)) {
-    categories = [f.category];
-  }
-  if (categories.length === 0) return null;
-  const snapshotRaw = (f.snapshot && typeof f.snapshot === 'object'
-    ? (f.snapshot as Record<string, unknown>)
-    : {}) as Record<string, unknown>;
-  return {
-    categories,
-    note: typeof f.note === 'string' ? f.note : '',
-    savedAt: typeof f.savedAt === 'string' ? f.savedAt : new Date().toISOString(),
-    snapshot: {
-      fileName: typeof snapshotRaw.fileName === 'string' ? snapshotRaw.fileName : 'image',
-      diagnosis: typeof snapshotRaw.diagnosis === 'string' ? snapshotRaw.diagnosis : '',
-      riskScore:
-        typeof snapshotRaw.riskScore === 'number' && Number.isFinite(snapshotRaw.riskScore)
-          ? snapshotRaw.riskScore
-          : null,
-      confidence: typeof snapshotRaw.confidence === 'string' ? snapshotRaw.confidence : '',
-    },
-  };
 }
 
 type ZoomView = 'input' | 'heatmap';
@@ -204,62 +168,6 @@ const RESULTS_IMAGE_MEDIA_FRAME_SX = {
   contain: 'layout',
 } as const;
 
-/**
- * When model contributions expand: image card borders match diagnosis height.
- * Grid stays top-aligned; columns stretch via align-self. Media frame is fixed; spacer grows below.
- */
-const RESULTS_GRID_STRETCH_SX = {
-  '& .results-image-column': {
-    alignSelf: 'stretch',
-    boxSizing: 'border-box',
-    display: 'flex',
-    flexDirection: 'column',
-    pb: 2.5,
-  },
-  '& .results-image-column .results-image-card': {
-    display: 'flex',
-    flexDirection: 'column',
-    flex: 1,
-    minHeight: 0,
-  },
-  '& .results-image-column .results-image-card-content': {
-    display: 'flex',
-    flex: 1,
-    flexDirection: 'column',
-    minHeight: 0,
-  },
-  '& .results-image-column .results-image-media-slot': {
-    flex: '0 0 auto',
-    width: '100%',
-  },
-  '& .results-image-column .results-image-card-stretch-spacer': {
-    flex: '1 1 auto',
-    minHeight: 0,
-  },
-  '& .results-diagnosis-column': {
-    alignSelf: 'stretch',
-    alignItems: 'stretch',
-    display: 'flex',
-    flexDirection: 'column',
-    pb: 2.5,
-  },
-  '& .results-diagnosis-shell': {
-    display: 'flex',
-    flex: 1,
-    flexDirection: 'column',
-    mb: 0,
-    minHeight: 0,
-    position: 'relative',
-    width: '100%',
-  },
-  '& .results-diagnosis-card': {
-    display: 'flex',
-    flex: 1,
-    flexDirection: 'column',
-    minHeight: 0,
-  },
-} as const;
-
 /** Empty image slot: glass-style panel for light + dark (replaces solid black placeholders). */
 type ResultsImageColumnProps = {
   gridArea: 'input' | 'heatmap';
@@ -278,6 +186,7 @@ type ResultsImageColumnProps = {
   cardBg: string;
   cardBorder: string;
   mutedText: string;
+  cardRef?: React.Ref<HTMLDivElement>;
 };
 
 /** Isolated from contributions toggle so expand/collapse does not re-render images. */
@@ -298,10 +207,12 @@ const ResultsImageColumn = React.memo(function ResultsImageColumn({
   cardBg,
   cardBorder,
   mutedText,
+  cardRef,
 }: ResultsImageColumnProps) {
   return (
     <Box className="results-image-column" sx={{ gridArea, minWidth: 0, pb: 2.5 }}>
       <Card
+        ref={cardRef}
         className="results-image-card"
         variant="outlined"
         sx={{
@@ -309,6 +220,7 @@ const ResultsImageColumn = React.memo(function ResultsImageColumn({
           borderColor: cardBorder,
           color: 'text.primary',
           borderRadius: 2,
+          boxSizing: 'border-box',
         }}
       >
         <CardHeader
@@ -343,7 +255,7 @@ const ResultsImageColumn = React.memo(function ResultsImageColumn({
             },
           }}
         />
-        <CardContent className="results-image-card-content" sx={{ pt: 1 }}>
+        <CardContent className="results-image-card-content" sx={{ pt: 1, '&:last-child': { pb: 2 } }}>
           <Box
             className="results-image-media-slot"
             sx={{
@@ -380,7 +292,6 @@ const ResultsImageColumn = React.memo(function ResultsImageColumn({
               )}
             </Box>
           </Box>
-          <Box className="results-image-card-stretch-spacer" aria-hidden />
         </CardContent>
       </Card>
     </Box>
@@ -486,6 +397,230 @@ function contributionBars(contrib?: {
   ];
 }
 
+type ContributionBarRow = { label: string; value: number; barColor: string };
+
+type ContributionsLayoutContextValue = {
+  open: boolean;
+  setOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  /** Drop stretch immediately when collapsing (card borders shrink with the panel). */
+  collapseStretchNow: () => void;
+};
+
+const ContributionsLayoutContext = React.createContext<ContributionsLayoutContextValue | null>(
+  null,
+);
+
+function useContributionsLayout() {
+  const ctx = React.useContext(ContributionsLayoutContext);
+  if (!ctx) {
+    throw new Error('useContributionsLayout must be used within ResultsOverviewGrid');
+  }
+  return ctx;
+}
+
+type ResultsOverviewGridProps = {
+  children: React.ReactNode;
+  sx: object;
+  assessmentColumnRef: React.RefObject<HTMLDivElement | null>;
+  inputCardRef: React.RefObject<HTMLDivElement | null>;
+  heatmapCardRef: React.RefObject<HTMLDivElement | null>;
+};
+
+/** Owns contributions open state; syncs image card min-height via DOM (no layout-class toggles). */
+function ResultsOverviewGrid({
+  children,
+  sx,
+  assessmentColumnRef,
+  inputCardRef,
+  heatmapCardRef,
+}: ResultsOverviewGridProps) {
+  const [open, setOpen] = React.useState(false);
+  const clearHeightsTimerRef = React.useRef<number | null>(null);
+
+  const clearImageCardHeights = React.useCallback(() => {
+    if (inputCardRef.current) {
+      inputCardRef.current.style.minHeight = '';
+    }
+    if (heatmapCardRef.current) {
+      heatmapCardRef.current.style.minHeight = '';
+    }
+  }, [heatmapCardRef, inputCardRef]);
+
+  const collapseStretchNow = React.useCallback(() => {
+    if (clearHeightsTimerRef.current != null) {
+      window.clearTimeout(clearHeightsTimerRef.current);
+      clearHeightsTimerRef.current = null;
+    }
+    clearImageCardHeights();
+  }, [clearImageCardHeights]);
+
+  React.useLayoutEffect(() => {
+    const assessment = assessmentColumnRef.current;
+    const inputCard = inputCardRef.current;
+    const heatmapCard = heatmapCardRef.current;
+    if (!assessment || !inputCard || !heatmapCard) return;
+
+    const syncHeights = () => {
+      if (!open) return;
+      const height = Math.round(assessment.getBoundingClientRect().height);
+      if (height < 1) return;
+      const px = `${height}px`;
+      inputCard.style.minHeight = px;
+      heatmapCard.style.minHeight = px;
+    };
+
+    if (!open) {
+      if (clearHeightsTimerRef.current != null) {
+        window.clearTimeout(clearHeightsTimerRef.current);
+      }
+      clearHeightsTimerRef.current = window.setTimeout(() => {
+        clearImageCardHeights();
+        clearHeightsTimerRef.current = null;
+      }, 280);
+      return () => {
+        if (clearHeightsTimerRef.current != null) {
+          window.clearTimeout(clearHeightsTimerRef.current);
+          clearHeightsTimerRef.current = null;
+        }
+      };
+    }
+
+    if (clearHeightsTimerRef.current != null) {
+      window.clearTimeout(clearHeightsTimerRef.current);
+      clearHeightsTimerRef.current = null;
+    }
+
+    syncHeights();
+    const observer = new ResizeObserver(syncHeights);
+    observer.observe(assessment);
+    return () => observer.disconnect();
+  }, [open, assessmentColumnRef, clearImageCardHeights, heatmapCardRef, inputCardRef]);
+
+  const contextValue = React.useMemo(
+    () => ({ open, setOpen, collapseStretchNow }),
+    [open, collapseStretchNow],
+  );
+
+  return (
+    <ContributionsLayoutContext.Provider value={contextValue}>
+      <Box className="results-overview-grid" sx={sx}>
+        {children}
+      </Box>
+    </ContributionsLayoutContext.Provider>
+  );
+}
+
+type ModelContributionsSectionProps = {
+  modelRows: ContributionBarRow[];
+  cardBg: string;
+  cardBorder: string;
+  mutedText: string;
+};
+
+/** Chevron + expandable model contributions (isolated from image columns). */
+function ModelContributionsSection({
+  modelRows,
+  cardBg,
+  cardBorder,
+  mutedText,
+}: ModelContributionsSectionProps) {
+  const { open, setOpen, collapseStretchNow } = useContributionsLayout();
+
+  return (
+    <>
+      <Box sx={{ position: 'relative', height: 0, zIndex: 2 }}>
+        <Box
+          aria-hidden
+          sx={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: 0,
+            height: '1px',
+            pointerEvents: 'none',
+            transform: 'translateY(-50%)',
+            opacity: open ? 1 : 0,
+            transition: 'opacity 280ms cubic-bezier(0.4, 0, 0.2, 1)',
+            background: (theme) =>
+              `linear-gradient(90deg, transparent 0%, ${theme.palette.divider} 16%, ${theme.palette.divider} 50%, ${theme.palette.divider} 84%, transparent 100%)`,
+          }}
+        />
+        <IconButton
+          size="small"
+          aria-label={open ? 'Hide model contributions' : 'Show model contributions'}
+          aria-expanded={open}
+          onClick={() => {
+            if (open) {
+              collapseStretchNow();
+            }
+            setOpen((wasOpen) => !wasOpen);
+          }}
+          sx={{
+            position: 'absolute',
+            left: '50%',
+            top: 0,
+            width: 32,
+            height: 32,
+            p: 0,
+            borderRadius: '50%',
+            border: '1px solid',
+            borderColor: cardBorder,
+            bgcolor: cardBg,
+            boxShadow: '0 2px 8px rgba(15, 23, 42, 0.12)',
+            transition: 'transform 180ms ease',
+            transform: open ? 'translate(-50%, -50%) rotate(180deg)' : 'translate(-50%, -50%)',
+            '&:hover': { bgcolor: 'action.hover' },
+          }}
+        >
+          <ExpandMoreIcon fontSize="small" />
+        </IconButton>
+      </Box>
+
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateRows: open ? '1fr' : '0fr',
+          transition: 'grid-template-rows 280ms cubic-bezier(0.4, 0, 0.2, 1)',
+        }}
+      >
+        <Box sx={{ overflow: 'hidden', minHeight: 0 }}>
+          <Box sx={{ px: 2, pb: 2, pt: 3.5 }}>
+            <Typography
+              variant="subtitle1"
+              sx={{ color: mutedText, mb: 1.5, fontWeight: 600, fontSize: '1rem' }}
+            >
+              Model contributions
+            </Typography>
+            {modelRows.map((item) => (
+              <Box key={item.label} sx={{ mb: 1.5 }}>
+                <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+                  <Typography variant="body2">{item.label}</Typography>
+                  <Typography variant="body2" sx={{ color: mutedText }}>
+                    {item.value}%
+                  </Typography>
+                </Stack>
+                <LinearProgress
+                  variant="determinate"
+                  value={item.value}
+                  sx={{
+                    height: 6,
+                    borderRadius: 3,
+                    bgcolor: 'action.hover',
+                    '& .MuiLinearProgress-bar': {
+                      borderRadius: 3,
+                      bgcolor: item.barColor,
+                    },
+                  }}
+                />
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      </Box>
+    </>
+  );
+}
+
 export default function Features({
   previewImageUrl,
   localPreviewUrl,
@@ -569,23 +704,14 @@ export default function Features({
   // const modelRows = pred && riskPct != null
   const modelRows = contributionBars(pred?.model_contributions);
 
-  const [contributionsOpen, setContributionsOpen] = React.useState(false);
-  /** Stretch image card borders while contributions are open or closing (keeps bottoms aligned during animation). */
-  const [contributionsStretchLayout, setContributionsStretchLayout] = React.useState(false);
+  const inputCardRef = React.useRef<HTMLDivElement>(null);
+  const heatmapCardRef = React.useRef<HTMLDivElement>(null);
+  const assessmentColumnRef = React.useRef<HTMLDivElement>(null);
   const [zoomOpen, setZoomOpen] = React.useState(false);
   const [zoomView, setZoomView] = React.useState<ZoomView>('input');
   const [zoomScale, setZoomScale] = React.useState(1);
   const zoomTouchStartX = React.useRef<number | null>(null);
   const zoomContentRef = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    if (contributionsOpen) {
-      setContributionsStretchLayout(true);
-      return;
-    }
-    const timer = window.setTimeout(() => setContributionsStretchLayout(false), 280);
-    return () => window.clearTimeout(timer);
-  }, [contributionsOpen]);
 
   const previewSrcForIndex = React.useCallback(
     (idx: number) => {
@@ -734,7 +860,7 @@ export default function Features({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [hasBatch, onNavigateIndex, canGoPrev, canGoNext, safeIndex]);
 
-  // ---- Anomaly flags (simplest opt-in, persisted to localStorage) ----
+  // ---- Anomaly flags (in-memory prototype) ----
   /** Keyed by filename: stable enough for a prototype, lets re-running the same image keep its note. */
   const currentFlagKey: string | null = pred
     ? (selectedItem?.fileName ?? latestUpload?.fileName ?? null)
@@ -849,8 +975,10 @@ export default function Features({
           ) : null}
         </Stack>
 
-        <Box
-          data-stretch={contributionsStretchLayout ? '' : undefined}
+        <ResultsOverviewGrid
+          assessmentColumnRef={assessmentColumnRef}
+          inputCardRef={inputCardRef}
+          heatmapCardRef={heatmapCardRef}
           sx={{
             display: 'grid',
             gap: { xs: 2.5, md: 3 },
@@ -864,22 +992,18 @@ export default function Features({
               `,
               lg: `"input heatmap diagnosis"`,
             },
-            '& .results-image-card-stretch-spacer': {
-              flex: '0 0 0',
-              height: 0,
-              minHeight: 0,
-              overflow: 'hidden',
-            },
-            '&[data-stretch]': RESULTS_GRID_STRETCH_SX,
-            '&:not([data-stretch]) .results-diagnosis-shell': {
+            '& .results-diagnosis-shell': {
               mb: 2.5,
             },
-            '&:not([data-stretch]) .results-diagnosis-column': {
-              alignItems: 'center',
+            '& .results-diagnosis-column': {
+              alignItems: 'stretch',
+              display: 'flex',
+              flexDirection: 'column',
             },
           }}
         >
           <ResultsImageColumn
+            cardRef={inputCardRef}
             gridArea="input"
             title="Input X-Ray"
             subheader={previewSubheader}
@@ -897,8 +1021,25 @@ export default function Features({
             cardBorder={cardBorder}
             mutedText={mutedText}
           />
-          {/* Diagnosis — right column on desktop (+ contributions extension below) */}
-          <Box className="results-diagnosis-column" sx={{ gridArea: 'diagnosis', minWidth: 0 }}>
+          <ResultsImageColumn
+            cardRef={heatmapCardRef}
+            gridArea="heatmap"
+            title="Prediction Heat Map"
+            subheader="Highlighted TB-suspect regions"
+            hasMedia={hasHeatmap}
+            hasBatch={hasBatch}
+            canGoPrev={canGoPrev}
+            canGoNext={canGoNext}
+            onGoPrev={handleGoPrevImage}
+            onGoNext={handleGoNextImage}
+            mediaSrc={hasHeatmap ? heatmapSrc : undefined}
+            mediaAlt="Saliency overlay on input study"
+            onOpenZoom={handleOpenHeatmapZoom}
+            cardBg={cardBg}
+            cardBorder={cardBorder}
+            mutedText={mutedText}
+          />
+          <Box ref={assessmentColumnRef} className="results-diagnosis-column" sx={{ gridArea: 'diagnosis' }}>
           <Box className="results-diagnosis-shell">
           <Box
             className="results-diagnosis-card"
@@ -1223,114 +1364,16 @@ export default function Features({
 
   </Box>
 
-            <Box sx={{ position: 'relative', height: 0, zIndex: 2 }}>
-              <Box
-                aria-hidden
-                sx={{
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  top: 0,
-                  height: '1px',
-                  pointerEvents: 'none',
-                  transform: 'translateY(-50%)',
-                  opacity: contributionsOpen ? 1 : 0,
-                  transition: 'opacity 280ms cubic-bezier(0.4, 0, 0.2, 1)',
-                  background: (theme) =>
-                    `linear-gradient(90deg, transparent 0%, ${theme.palette.divider} 16%, ${theme.palette.divider} 50%, ${theme.palette.divider} 84%, transparent 100%)`,
-                }}
-              />
-              <IconButton
-                size="small"
-                aria-label={contributionsOpen ? 'Hide model contributions' : 'Show model contributions'}
-                aria-expanded={contributionsOpen}
-                onClick={() => setContributionsOpen((open) => !open)}
-                sx={{
-                  position: 'absolute',
-                  left: '50%',
-                  top: 0,
-                  width: 32,
-                  height: 32,
-                  p: 0,
-                  borderRadius: '50%',
-                  border: '1px solid',
-                  borderColor: cardBorder,
-                  bgcolor: cardBg,
-                  boxShadow: '0 2px 8px rgba(15, 23, 42, 0.12)',
-                  transition: 'transform 180ms ease',
-                  transform: contributionsOpen
-                    ? 'translate(-50%, -50%) rotate(180deg)'
-                    : 'translate(-50%, -50%)',
-                  '&:hover': { bgcolor: 'action.hover' },
-                }}
-              >
-                <ExpandMoreIcon fontSize="small" />
-              </IconButton>
-            </Box>
-
-            <Box
-              sx={{
-                display: 'grid',
-                gridTemplateRows: contributionsOpen ? '1fr' : '0fr',
-                transition: 'grid-template-rows 280ms cubic-bezier(0.4, 0, 0.2, 1)',
-              }}
-            >
-              <Box sx={{ overflow: 'hidden', minHeight: 0 }}>
-                <Box sx={{ px: 2, pb: 2, pt: 3.5 }}>
-                  <Typography
-                    variant="subtitle1"
-                    sx={{ color: mutedText, mb: 1.5, fontWeight: 600, fontSize: '1rem' }}
-                  >
-                    Model contributions
-                  </Typography>
-                  {modelRows.map((item) => (
-                    <Box key={item.label} sx={{ mb: 1.5 }}>
-                      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
-                        <Typography variant="body2">{item.label}</Typography>
-                        <Typography variant="body2" sx={{ color: mutedText }}>
-                          {item.value}%
-                        </Typography>
-                      </Stack>
-                      <LinearProgress
-                        variant="determinate"
-                        value={item.value}
-                        sx={{
-                          height: 6,
-                          borderRadius: 3,
-                          bgcolor: 'action.hover',
-                          '& .MuiLinearProgress-bar': {
-                            borderRadius: 3,
-                            bgcolor: item.barColor,
-                          },
-                        }}
-                      />
-                    </Box>
-                  ))}
-                </Box>
-              </Box>
-            </Box>
+            <ModelContributionsSection
+              modelRows={modelRows}
+              cardBg={cardBg}
+              cardBorder={cardBorder}
+              mutedText={mutedText}
+            />
           </Box>
           </Box>
           </Box>
-
-          <ResultsImageColumn
-            gridArea="heatmap"
-            title="Prediction Heat Map"
-            subheader="Highlighted TB-suspect regions"
-            hasMedia={hasHeatmap}
-            hasBatch={hasBatch}
-            canGoPrev={canGoPrev}
-            canGoNext={canGoNext}
-            onGoPrev={handleGoPrevImage}
-            onGoNext={handleGoNextImage}
-            mediaSrc={hasHeatmap ? heatmapSrc : undefined}
-            mediaAlt="Saliency overlay on input study"
-            onOpenZoom={handleOpenHeatmapZoom}
-            cardBg={cardBg}
-            cardBorder={cardBorder}
-            mutedText={mutedText}
-          />
-        </Box>
+        </ResultsOverviewGrid>
         <Dialog
           open={zoomOpen}
           onClose={closeZoom}
