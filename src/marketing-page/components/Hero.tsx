@@ -8,7 +8,7 @@ import Link from '@mui/material/Link';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import Chip from '@mui/material/Chip';
-import { predictImagesSequential, releaseBatchPreviewUrls, uploadImage } from '../../api/chexit';
+import { predictImagesSequential, releaseBatchPreviewUrls } from '../../api/chexit';
 import type { PredictUiState } from '../../api/chexit';
 import { gray } from '../../../shared-theme/themePrimitives';
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -17,7 +17,6 @@ const MAX_BATCH_IMAGES = 5;
 type HeroProps = {
   /** Latest analyze state (shown in alerts + passed to Features via parent). */
   predictUi: PredictUiState;
-  onUploadComplete?: (downloadUrl: string) => void;
   /** Temporary `blob:` URL for instant preview in the dashboard (no upload required). */
   onLocalPreviewChange?: (previewUrl: string | null) => void;
   onPredictUiChange?: (state: PredictUiState) => void;
@@ -25,15 +24,12 @@ type HeroProps = {
 
 export default function Hero({
   predictUi,
-  onUploadComplete,
   onLocalPreviewChange,
   onPredictUiChange,
 }: HeroProps) {
   const [selectedFiles, setSelectedFiles] = React.useState<File[]>([]);
   const [analyzing, setAnalyzing] = React.useState(false);
-  const [uploading, setUploading] = React.useState(false);
   const [uploadError, setUploadError] = React.useState<string | null>(null);
-  const [uploadSuccess, setUploadSuccess] = React.useState(false);
   const [progressText, setProgressText] = React.useState<string | null>(null);
   const [progressValue, setProgressValue] = React.useState<number>(0);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -64,7 +60,6 @@ export default function Hero({
     const files = picked.slice(0, MAX_BATCH_IMAGES);
     if (picked.length > MAX_BATCH_IMAGES) {
       setUploadError(`Only up to ${MAX_BATCH_IMAGES} images are allowed per batch.`);
-      setUploadSuccess(false);
     } else {
       setUploadError(null);
     }
@@ -78,17 +73,14 @@ export default function Hero({
     });
     if (badType) {
       setUploadError('Please upload PNG/JPG or DICOM (.dcm).');
-      setUploadSuccess(false);
       return;
     }
     const tooLarge = files.find((file) => file.size > MAX_IMAGE_BYTES);
     if (tooLarge) {
       setUploadError('Max file size is 10MB per image.');
-      setUploadSuccess(false);
       return;
     }
     setSelectedFiles(files);
-    setUploadSuccess(false);
     setProgressText(null);
     setProgressValue(0);
     releaseBatchPreviewUrls(previousItemsRef.current);
@@ -179,27 +171,6 @@ export default function Hero({
     }
   };
 
-  const handleUpload = async () => {
-    const selectedFile = selectedFiles[0];
-    if (!selectedFile) return;
-    setUploading(true);
-    setUploadError(null);
-    setUploadSuccess(false);
-    try {
-      const uploaded = await uploadImage(selectedFile);
-      onUploadComplete?.(uploaded.downloadURL);
-      setUploadSuccess(true);
-      releaseBrowsePreviewUrl();
-      onLocalPreviewChange?.(null);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Upload failed';
-      setUploadError(message);
-      setUploadSuccess(false);
-    } finally {
-      setUploading(false);
-    }
-  };
-
   return (
     <Box
       id="hero"
@@ -284,7 +255,7 @@ export default function Hero({
               color="primary"
               size="small"
               onClick={handleBrowseClick}
-              disabled={uploading || analyzing}
+              disabled={analyzing}
               sx={(theme) => ({
                 minWidth: 'fit-content',
                 '&.Mui-disabled': {
@@ -308,7 +279,7 @@ export default function Hero({
               color={selectedFiles.length > 0 ? 'primary' : 'inherit'}
               size="small"
               onClick={handleAnalyze}
-              disabled={uploading || analyzing}
+              disabled={analyzing}
               startIcon={analyzing ? <CircularProgress size={16} color="inherit" /> : undefined}
               sx={(theme) => ({
                 minWidth: 'fit-content',
@@ -341,40 +312,10 @@ export default function Hero({
             >
               {analyzing ? 'Analyzing…' : 'Analyze'}
             </Button>
-            <Button
-              type="button"
-              variant="outlined"
-              color="primary"
-              size="small"
-              onClick={handleUpload}
-              disabled={selectedFiles.length === 0 || uploading || analyzing}
-              startIcon={uploading ? <CircularProgress size={16} color="inherit" /> : undefined}
-              sx={(theme) => ({
-                minWidth: 'fit-content',
-                '&.Mui-disabled': {
-                  color: 'rgba(15,23,42,0.55)',
-                  borderColor: 'rgba(100,116,139,0.35)',
-                  backgroundColor: 'rgba(241,245,249,0.6)',
-                  opacity: 1,
-                  ...theme.applyStyles('dark', {
-                    color: 'rgba(241,245,249,0.78)',
-                    borderColor: 'rgba(148,163,184,0.45)',
-                    backgroundColor: 'rgba(30,41,59,0.65)',
-                  }),
-                },
-              })}
-            >
-              {uploading ? 'Uploading…' : 'Upload to cloud'}
-            </Button>
           </Stack>
           {uploadError && (
             <Typography variant="body2" color="error" sx={{ textAlign: 'center' }}>
               {uploadError}
-            </Typography>
-          )}
-          {uploadSuccess && (
-            <Typography variant="body2" color="success.main" sx={{ textAlign: 'center' }}>
-              File uploaded. Check preview below.
             </Typography>
           )}
           {(predictUi.loading || analyzing) && (

@@ -21,7 +21,6 @@ const initialPredict: PredictUiState = {
 };
 
 export default function MarketingPage(props: { disableCustomTheme?: boolean }) {
-  const [uploadedPreviewUrl, setUploadedPreviewUrl] = React.useState<string | null>(null);
   const [localPreviewUrl, setLocalPreviewUrl] = React.useState<string | null>(null);
   const [predictUi, setPredictUi] = React.useState<PredictUiState>(initialPredict);
 
@@ -67,14 +66,12 @@ export default function MarketingPage(props: { disableCustomTheme?: boolean }) {
       <AppAppBar />
       <Hero
         predictUi={predictUi}
-        onUploadComplete={setUploadedPreviewUrl}
         onLocalPreviewChange={setLocalPreviewUrl}
         onPredictUiChange={handlePredictUiChange}
       />
       <div>
         {/* <LogoCollection /> */}
         <Features
-          previewImageUrl={uploadedPreviewUrl}
           localPreviewUrl={localPreviewUrl}
           predictUi={predictUi}
           onNavigateIndex={handleNavigateResult}

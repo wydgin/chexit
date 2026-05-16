@@ -421,80 +421,69 @@ function useContributionsLayout() {
 type ResultsOverviewGridProps = {
   children: React.ReactNode;
   sx: object;
-  assessmentColumnRef: React.RefObject<HTMLDivElement | null>;
-  inputCardRef: React.RefObject<HTMLDivElement | null>;
-  heatmapCardRef: React.RefObject<HTMLDivElement | null>;
+  assessmentCardRef: React.RefObject<HTMLDivElement | null>;
 };
 
-/** Owns contributions open state; syncs image card min-height via DOM (no layout-class toggles). */
-function ResultsOverviewGrid({
-  children,
-  sx,
-  assessmentColumnRef,
-  inputCardRef,
-  heatmapCardRef,
-}: ResultsOverviewGridProps) {
+/** Owns contributions open state; matches image card min-height to expanded assessment card. */
+function ResultsOverviewGrid({ children, sx, assessmentCardRef }: ResultsOverviewGridProps) {
+  const gridRef = React.useRef<HTMLDivElement>(null);
   const [open, setOpen] = React.useState(false);
-  const clearHeightsTimerRef = React.useRef<number | null>(null);
+  const clearStretchTimerRef = React.useRef<number | null>(null);
 
-  const clearImageCardHeights = React.useCallback(() => {
-    if (inputCardRef.current) {
-      inputCardRef.current.style.minHeight = '';
-    }
-    if (heatmapCardRef.current) {
-      heatmapCardRef.current.style.minHeight = '';
-    }
-  }, [heatmapCardRef, inputCardRef]);
+  const clearStretch = React.useCallback(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    grid.removeAttribute('data-stretch');
+    grid.style.removeProperty('--results-row-align-h');
+  }, []);
 
   const collapseStretchNow = React.useCallback(() => {
-    if (clearHeightsTimerRef.current != null) {
-      window.clearTimeout(clearHeightsTimerRef.current);
-      clearHeightsTimerRef.current = null;
+    if (clearStretchTimerRef.current != null) {
+      window.clearTimeout(clearStretchTimerRef.current);
+      clearStretchTimerRef.current = null;
     }
-    clearImageCardHeights();
-  }, [clearImageCardHeights]);
+    clearStretch();
+  }, [clearStretch]);
 
   React.useLayoutEffect(() => {
-    const assessment = assessmentColumnRef.current;
-    const inputCard = inputCardRef.current;
-    const heatmapCard = heatmapCardRef.current;
-    if (!assessment || !inputCard || !heatmapCard) return;
+    const grid = gridRef.current;
+    const assessmentCard = assessmentCardRef.current;
+    if (!grid || !assessmentCard) return;
 
     const syncHeights = () => {
       if (!open) return;
-      const height = Math.round(assessment.getBoundingClientRect().height);
+      const height = Math.round(assessmentCard.getBoundingClientRect().height);
       if (height < 1) return;
-      const px = `${height}px`;
-      inputCard.style.minHeight = px;
-      heatmapCard.style.minHeight = px;
+      grid.setAttribute('data-stretch', '');
+      grid.style.setProperty('--results-row-align-h', `${height}px`);
     };
 
     if (!open) {
-      if (clearHeightsTimerRef.current != null) {
-        window.clearTimeout(clearHeightsTimerRef.current);
+      if (clearStretchTimerRef.current != null) {
+        window.clearTimeout(clearStretchTimerRef.current);
       }
-      clearHeightsTimerRef.current = window.setTimeout(() => {
-        clearImageCardHeights();
-        clearHeightsTimerRef.current = null;
+      clearStretchTimerRef.current = window.setTimeout(() => {
+        clearStretch();
+        clearStretchTimerRef.current = null;
       }, 280);
       return () => {
-        if (clearHeightsTimerRef.current != null) {
-          window.clearTimeout(clearHeightsTimerRef.current);
-          clearHeightsTimerRef.current = null;
+        if (clearStretchTimerRef.current != null) {
+          window.clearTimeout(clearStretchTimerRef.current);
+          clearStretchTimerRef.current = null;
         }
       };
     }
 
-    if (clearHeightsTimerRef.current != null) {
-      window.clearTimeout(clearHeightsTimerRef.current);
-      clearHeightsTimerRef.current = null;
+    if (clearStretchTimerRef.current != null) {
+      window.clearTimeout(clearStretchTimerRef.current);
+      clearStretchTimerRef.current = null;
     }
 
     syncHeights();
     const observer = new ResizeObserver(syncHeights);
-    observer.observe(assessment);
+    observer.observe(assessmentCard);
     return () => observer.disconnect();
-  }, [open, assessmentColumnRef, clearImageCardHeights, heatmapCardRef, inputCardRef]);
+  }, [open, assessmentCardRef, clearStretch]);
 
   const contextValue = React.useMemo(
     () => ({ open, setOpen, collapseStretchNow }),
@@ -503,7 +492,7 @@ function ResultsOverviewGrid({
 
   return (
     <ContributionsLayoutContext.Provider value={contextValue}>
-      <Box className="results-overview-grid" sx={sx}>
+      <Box ref={gridRef} className="results-overview-grid" sx={sx}>
         {children}
       </Box>
     </ContributionsLayoutContext.Provider>
@@ -706,7 +695,7 @@ export default function Features({
 
   const inputCardRef = React.useRef<HTMLDivElement>(null);
   const heatmapCardRef = React.useRef<HTMLDivElement>(null);
-  const assessmentColumnRef = React.useRef<HTMLDivElement>(null);
+  const assessmentCardRef = React.useRef<HTMLDivElement>(null);
   const [zoomOpen, setZoomOpen] = React.useState(false);
   const [zoomView, setZoomView] = React.useState<ZoomView>('input');
   const [zoomScale, setZoomScale] = React.useState(1);
@@ -976,9 +965,7 @@ export default function Features({
         </Stack>
 
         <ResultsOverviewGrid
-          assessmentColumnRef={assessmentColumnRef}
-          inputCardRef={inputCardRef}
-          heatmapCardRef={heatmapCardRef}
+          assessmentCardRef={assessmentCardRef}
           sx={{
             display: 'grid',
             gap: { xs: 2.5, md: 3 },
@@ -991,6 +978,10 @@ export default function Features({
                 "diagnosis"
               `,
               lg: `"input heatmap diagnosis"`,
+            },
+            '&[data-stretch] .results-image-card': {
+              boxSizing: 'border-box',
+              minHeight: 'var(--results-row-align-h)',
             },
             '& .results-diagnosis-shell': {
               mb: 2.5,
@@ -1039,9 +1030,10 @@ export default function Features({
             cardBorder={cardBorder}
             mutedText={mutedText}
           />
-          <Box ref={assessmentColumnRef} className="results-diagnosis-column" sx={{ gridArea: 'diagnosis' }}>
+          <Box className="results-diagnosis-column" sx={{ gridArea: 'diagnosis' }}>
           <Box className="results-diagnosis-shell">
           <Box
+            ref={assessmentCardRef}
             className="results-diagnosis-card"
             sx={{
               width: '100%',
