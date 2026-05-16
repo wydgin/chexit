@@ -118,6 +118,7 @@ const ImageZoomTrigger = React.memo(function ImageZoomTrigger({
       sx={{
         display: 'block',
         width: '100%',
+        height: '100%',
         p: 0,
         border: 'none',
         bgcolor: 'transparent',
@@ -134,6 +135,7 @@ const ImageZoomTrigger = React.memo(function ImageZoomTrigger({
         component="img"
         src={src}
         alt={alt}
+        decoding="async"
         onError={onError}
         sx={{
           borderRadius: 2,
@@ -141,11 +143,9 @@ const ImageZoomTrigger = React.memo(function ImageZoomTrigger({
           border: '1px solid',
           borderColor: cardBorder,
           width: '100%',
-          maxHeight: { xs: '52vh', md: '62vh' },
-          height: 'auto',
+          height: '100%',
           objectFit: 'contain',
           display: 'block',
-          mx: 'auto',
           pointerEvents: 'none',
         }}
       />
@@ -173,48 +173,74 @@ function HeatmapLegendBar() {
 const HEATMAP_GUIDE_TEXT =
   'Cooler blue areas received less AI model attention; red and yellow highlight regions that most influenced the TB risk estimate. This is not a diagnosis by itself — use it together with the risk score above.';
 
-/** Empty image slot: glass-style panel for light + dark (replaces solid black placeholders). */
+/** Map API / legacy diagnosis strings to user-facing risk labels. */
+function formatDiagnosisLabel(diagnosis: string): string {
+  const d = diagnosis.trim();
+  if (/tb\s*positive|^positive$/i.test(d)) return 'High risk';
+  if (/tb\s*negative|^negative$/i.test(d)) return 'Low risk';
+  return d;
+}
+
+function isHighRiskFromResult(
+  diagnosis: string,
+  riskPct: number | null,
+  confidenceLabel = '',
+): boolean {
+  const label = formatDiagnosisLabel(diagnosis);
+  if (/high/i.test(label)) return true;
+  if (/low/i.test(label)) return false;
+  if (/high/i.test(confidenceLabel)) return true;
+  if (riskPct != null && riskPct >= 50) return true;
+  return false;
+}
+
+/** Default media area — fixed size; never grows when the card border stretches. */
+const RESULTS_IMAGE_MEDIA_FRAME_SX = {
+  width: '100%',
+  aspectRatio: '1 / 1',
+  maxHeight: { xs: '52vh', md: '56vh' },
+  flexShrink: 0,
+  flexGrow: 0,
+  contain: 'layout',
+} as const;
+
+/**
+ * When model contributions expand: image card borders match diagnosis height.
+ * Grid stays top-aligned; columns stretch via align-self. Media frame is fixed; spacer grows below.
+ */
 const RESULTS_GRID_STRETCH_SX = {
   '& .results-image-column': {
+    alignSelf: 'stretch',
     boxSizing: 'border-box',
     display: 'flex',
     flexDirection: 'column',
-    height: '100%',
     pb: 2.5,
   },
-  /* Stretch card chrome to match diagnosis height (with or without an image). */
   '& .results-image-column .results-image-card': {
     display: 'flex',
     flexDirection: 'column',
     flex: 1,
     minHeight: 0,
   },
-  /* Real images: center in the tall card. */
-  '& .results-image-column--has-media .results-image-card-content': {
+  '& .results-image-column .results-image-card-content': {
     display: 'flex',
     flex: 1,
     flexDirection: 'column',
     minHeight: 0,
   },
-  '& .results-image-column--has-media .results-image-media-slot': {
-    alignItems: 'center',
-    display: 'flex',
-    flex: 1,
-    justifyContent: 'center',
+  '& .results-image-column .results-image-media-slot': {
+    flex: '0 0 auto',
+    width: '100%',
+  },
+  '& .results-image-column .results-image-card-stretch-spacer': {
+    flex: '1 1 auto',
     minHeight: 0,
   },
-  /* Placeholders: card grows, glass panel keeps its aspect ratio. */
-  '& .results-image-column:not(.results-image-column--has-media) .results-image-card-content': {
-    flex: '0 1 auto',
-  },
-  '& .results-image-column:not(.results-image-column--has-media) .results-image-media-slot': {
-    flex: '0 1 auto',
-  },
   '& .results-diagnosis-column': {
+    alignSelf: 'stretch',
     alignItems: 'stretch',
     display: 'flex',
     flexDirection: 'column',
-    height: '100%',
     pb: 2.5,
   },
   '& .results-diagnosis-shell': {
@@ -234,6 +260,7 @@ const RESULTS_GRID_STRETCH_SX = {
   },
 } as const;
 
+/** Empty image slot: glass-style panel for light + dark (replaces solid black placeholders). */
 type ResultsImageColumnProps = {
   gridArea: 'input' | 'heatmap';
   title: string;
@@ -273,10 +300,7 @@ const ResultsImageColumn = React.memo(function ResultsImageColumn({
   mutedText,
 }: ResultsImageColumnProps) {
   return (
-    <Box
-      className={`results-image-column${hasMedia ? ' results-image-column--has-media' : ''}`}
-      sx={{ gridArea, minWidth: 0 }}
-    >
+    <Box className="results-image-column" sx={{ gridArea, minWidth: 0, pb: 2.5 }}>
       <Card
         className="results-image-card"
         variant="outlined"
@@ -320,18 +344,43 @@ const ResultsImageColumn = React.memo(function ResultsImageColumn({
           }}
         />
         <CardContent className="results-image-card-content" sx={{ pt: 1 }}>
-          <Box className="results-image-media-slot" sx={{ width: '100%' }}>
-            {hasMedia && mediaSrc ? (
-              <ImageZoomTrigger
-                src={mediaSrc}
-                alt={mediaAlt}
-                onError={onMediaError}
-                onOpen={onOpenZoom}
-              />
-            ) : (
-              <Box aria-hidden sx={(theme) => liquidGlassImagePlaceholderSx(theme)} />
-            )}
+          <Box
+            className="results-image-media-slot"
+            sx={{
+              ...RESULTS_IMAGE_MEDIA_FRAME_SX,
+              position: 'relative',
+            }}
+          >
+            <Box
+              sx={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              {hasMedia && mediaSrc ? (
+                <ImageZoomTrigger
+                  src={mediaSrc}
+                  alt={mediaAlt}
+                  onError={onMediaError}
+                  onOpen={onOpenZoom}
+                />
+              ) : (
+                <Box
+                  aria-hidden
+                  sx={(theme) => ({
+                    ...liquidGlassImagePlaceholderSx(theme),
+                    flex: 1,
+                    minHeight: 0,
+                    height: '100%',
+                    aspectRatio: 'unset',
+                  })}
+                />
+              )}
+            </Box>
           </Box>
+          <Box className="results-image-card-stretch-spacer" aria-hidden />
         </CardContent>
       </Card>
     </Box>
@@ -342,7 +391,6 @@ function liquidGlassImagePlaceholderSx(theme: Theme) {
   return {
     borderRadius: 2,
     width: '100%',
-    aspectRatio: '3 / 4',
     position: 'relative' as const,
     overflow: 'hidden',
     border: '1px solid',
@@ -505,11 +553,8 @@ export default function Features({
       : null;
   const diagnosisLine = pred?.diagnosis?.trim() ?? '';
   const confidenceLine = pred?.confidence_label?.trim() ?? '';
-  const isHighRisk = Boolean(
-    /positive/i.test(diagnosisLine) ||
-      /high/i.test(confidenceLine) ||
-      (riskPct != null && riskPct >= 50),
-  );
+  const diagnosisDisplay = formatDiagnosisLabel(diagnosisLine);
+  const isHighRisk = isHighRiskFromResult(diagnosisLine, riskPct, confidenceLine);
   /** Remount diagnosis UI when a new API payload arrives so labels/scores never appear stale. */
   const analysisVersionKey = pred
     ? `${diagnosisLine}|${riskPct ?? ''}|${confidenceLine}`
@@ -525,8 +570,8 @@ export default function Features({
   const modelRows = contributionBars(pred?.model_contributions);
 
   const [contributionsOpen, setContributionsOpen] = React.useState(false);
-  /** After the contributions panel finishes opening — avoids image cards reflowing mid-animation. */
-  const [contributionsAlignStretch, setContributionsAlignStretch] = React.useState(false);
+  /** Stretch image card borders while contributions are open or closing (keeps bottoms aligned during animation). */
+  const [contributionsStretchLayout, setContributionsStretchLayout] = React.useState(false);
   const [zoomOpen, setZoomOpen] = React.useState(false);
   const [zoomView, setZoomView] = React.useState<ZoomView>('input');
   const [zoomScale, setZoomScale] = React.useState(1);
@@ -534,11 +579,11 @@ export default function Features({
   const zoomContentRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    if (!contributionsOpen) {
-      setContributionsAlignStretch(false);
+    if (contributionsOpen) {
+      setContributionsStretchLayout(true);
       return;
     }
-    const timer = window.setTimeout(() => setContributionsAlignStretch(true), 280);
+    const timer = window.setTimeout(() => setContributionsStretchLayout(false), 280);
     return () => window.clearTimeout(timer);
   }, [contributionsOpen]);
 
@@ -739,7 +784,7 @@ export default function Features({
         savedAt: new Date().toISOString(),
         snapshot: {
           fileName: selectedItem?.fileName ?? latestUpload?.fileName ?? 'image',
-          diagnosis: diagnosisLine,
+          diagnosis: diagnosisDisplay,
           riskScore: riskPct,
           confidence: confidenceLine,
         },
@@ -755,7 +800,7 @@ export default function Features({
     flagFormNote,
     selectedItem,
     latestUpload,
-    diagnosisLine,
+    diagnosisDisplay,
     riskPct,
     confidenceLine,
   ]);
@@ -805,7 +850,7 @@ export default function Features({
         </Stack>
 
         <Box
-          data-stretch={contributionsAlignStretch ? '' : undefined}
+          data-stretch={contributionsStretchLayout ? '' : undefined}
           sx={{
             display: 'grid',
             gap: { xs: 2.5, md: 3 },
@@ -819,10 +864,13 @@ export default function Features({
               `,
               lg: `"input heatmap diagnosis"`,
             },
-            '&[data-stretch]': {
-              alignItems: 'stretch',
-              ...RESULTS_GRID_STRETCH_SX,
+            '& .results-image-card-stretch-spacer': {
+              flex: '0 0 0',
+              height: 0,
+              minHeight: 0,
+              overflow: 'hidden',
             },
+            '&[data-stretch]': RESULTS_GRID_STRETCH_SX,
             '&:not([data-stretch]) .results-diagnosis-shell': {
               mb: 2.5,
             },
@@ -883,7 +931,7 @@ export default function Features({
         variant="overline"
         sx={{ color: mutedText, letterSpacing: 1.5 }}
       >
-        DIAGNOSIS
+        ASSESSMENT
       </Typography>
 
       <Box sx={{ mt: 1 }}>
@@ -899,27 +947,37 @@ export default function Features({
           }}
         >
           {diagnosisLine ? (
-            diagnosisLine
+            diagnosisDisplay
           ) : predictUi.loading ? (
             <CircularProgress size={30} thickness={5} />
           ) : (
             '—'
           )}
         </Typography>
-        {confidenceLine.trim() ? (
+        {pred && !predictUi.loading ? (
           <Chip
-            label={confidenceLine}
+            label=""
             size="small"
+            aria-label={isHighRisk ? 'High risk' : 'Low risk'}
             sx={{
               mt: 1,
               alignSelf: 'flex-start',
-              bgcolor: isHighRisk ? 'rgba(239,68,68,0.12)' : 'rgba(34,197,94,0.12)',
-              border: isHighRisk ? '1px solid #ef4444' : '1px solid #22c55e',
-              color: isHighRisk ? '#ef4444' : '#16a34a',
               fontSize: 11,
               height: 24,
+              minWidth: 48,
               borderRadius: 999,
               px: 1.5,
+              '&.MuiChip-root': {
+                backgroundColor: isHighRisk ? 'rgba(239,68,68,0.85)' : 'rgba(34,197,94,0.85)',
+                border: isHighRisk ? '2px solid #ef4444' : '2px solid #22c55e',
+                color: isHighRisk ? '#ef4444' : '#22c55e',
+              },
+              '& .MuiChip-label': {
+                p: 0,
+                width: 0,
+                overflow: 'hidden',
+                opacity: 0,
+              },
             }}
           />
         ) : null}
@@ -1186,12 +1244,7 @@ export default function Features({
                 size="small"
                 aria-label={contributionsOpen ? 'Hide model contributions' : 'Show model contributions'}
                 aria-expanded={contributionsOpen}
-                onClick={() => {
-                if (contributionsOpen) {
-                  setContributionsAlignStretch(false);
-                }
-                setContributionsOpen((open) => !open);
-              }}
+                onClick={() => setContributionsOpen((open) => !open)}
                 sx={{
                   position: 'absolute',
                   left: '50%',
@@ -1259,8 +1312,6 @@ export default function Features({
           </Box>
           </Box>
           </Box>
-
-
 
           <ResultsImageColumn
             gridArea="heatmap"
@@ -1487,7 +1538,7 @@ export default function Features({
                             variant="caption"
                             sx={{ color: mutedText, display: 'block' }}
                           >
-                            Model: {flag.snapshot.diagnosis || '—'}
+                            Model: {formatDiagnosisLabel(flag.snapshot.diagnosis || '') || '—'}
                             {flag.snapshot.riskScore != null ? ` • ${flag.snapshot.riskScore}%` : ''}
                             {flag.snapshot.confidence ? ` • ${flag.snapshot.confidence}` : ''}
                           </Typography>

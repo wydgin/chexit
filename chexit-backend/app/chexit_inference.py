@@ -130,7 +130,7 @@ def _max_cxr_long_edge() -> int | None:
     return None if v <= 0 else v
 
 
-CLASS_NAMES = ("TB Negative", "TB Positive")
+CLASS_NAMES = ("Low risk", "High risk")
 
 
 def _setup_pipeline_logger() -> logging.Logger:
