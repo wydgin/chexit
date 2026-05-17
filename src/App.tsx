@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Navigate, Routes, Route } from 'react-router-dom';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
@@ -50,9 +50,11 @@ function App() {
     <ErrorBoundary>
       <BrowserRouter>
         <Routes>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<MarketingPage />} />
           <Route path="/about" element={<AboutPage />} />
-          <Route path="/" element={<SignInSide />} />
+          {/* Sign-in archived — restore by moving SignInSide back to path="/" */}
+          <Route path="/sign-in" element={<SignInSide />} />
         </Routes>
       </BrowserRouter>
     </ErrorBoundary>
