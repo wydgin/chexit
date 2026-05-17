@@ -1,0 +1,19 @@
+[Unit]
+Description=Chexit API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/chexit/chexit-backend
+Environment=PYTHONPATH=/opt/chexit/chexit-backend
+Environment=CHEXIT_ASSETS_ROOT=/opt/chexit/assets
+Environment=CHEXIT_UPLOADS_DIR=/var/chexit/uploads
+Environment=CHEXIT_SKIP_GDOWN=1
+Environment="CHEXIT_CORS_ORIGINS=https://chexit.app,https://www.chexit.app"
+Environment=CHEXIT_SKIP_SCORECAM=0
+ExecStart=/opt/chexit/chexit-backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

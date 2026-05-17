@@ -216,6 +216,7 @@ const ResultsImageColumn = React.memo(function ResultsImageColumn({
         className="results-image-card"
         variant="outlined"
         sx={{
+          minWidth: 0,
           bgcolor: cardBg,
           borderColor: cardBorder,
           color: 'text.primary',
@@ -782,6 +783,11 @@ export default function Features({
         closeZoom();
         return;
       }
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+        return;
+      }
+      // Block batch image navigation while zoom is open — arrows only toggle this image's input ↔ heatmap.
+      event.preventDefault();
       if (event.key === 'ArrowLeft' && zoomView === 'heatmap' && zoomCanShowInput) {
         setZoomView('input');
         setZoomScale(1);
@@ -833,7 +839,7 @@ export default function Features({
   }, [zoomOpen, zoomView, zoomCanShowHeatmap, zoomCanShowInput, safeIndex]);
 
   React.useEffect(() => {
-    if (!hasBatch || !onNavigateIndex) {
+    if (!hasBatch || !onNavigateIndex || zoomOpen) {
       return;
     }
     const onKeyDown = (event: KeyboardEvent) => {
@@ -847,7 +853,7 @@ export default function Features({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [hasBatch, onNavigateIndex, canGoPrev, canGoNext, safeIndex]);
+  }, [hasBatch, onNavigateIndex, canGoPrev, canGoNext, safeIndex, zoomOpen]);
 
   // ---- Anomaly flags (in-memory prototype) ----
   /** Keyed by filename: stable enough for a prototype, lets re-running the same image keep its note. */

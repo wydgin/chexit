@@ -8,7 +8,11 @@ import Link from '@mui/material/Link';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import Chip from '@mui/material/Chip';
-import { predictImagesSequential, releaseBatchPreviewUrls } from '../../api/chexit';
+import {
+  createBatchItems,
+  predictImagesSequential,
+  releaseBatchPreviewUrls,
+} from '../../api/chexit';
 import type { PredictUiState } from '../../api/chexit';
 import { gray } from '../../../shared-theme/themePrimitives';
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -84,24 +88,19 @@ export default function Hero({
     setProgressText(null);
     setProgressValue(0);
     releaseBatchPreviewUrls(previousItemsRef.current);
-    previousItemsRef.current = [];
-    /**
-     * Show the picked image in the dashboard immediately. DICOMs can't be rendered
-     * by <img>, so we only build a blob URL for the first non-DICOM file; otherwise
-     * the placeholder stays until Analyze produces a server-side preview.
-     */
     releaseBrowsePreviewUrl();
-    const firstPreviewable = files.find((file) => {
-      const isDicom =
-        file.type === 'application/dicom' ||
-        file.type === 'application/octet-stream' ||
-        /\.(dcm|dicom)$/i.test(file.name);
-      return !isDicom;
+    const items = createBatchItems(files);
+    previousItemsRef.current = items;
+    const firstPreviewable = items.findIndex((item) => item.localPreviewUrl);
+    const initialIndex = firstPreviewable >= 0 ? firstPreviewable : 0;
+    onLocalPreviewChange?.(items[initialIndex]?.localPreviewUrl ?? null);
+    onPredictUiChange?.({
+      loading: false,
+      error: null,
+      data: null,
+      items,
+      currentIndex: initialIndex,
     });
-    const nextPreviewUrl = firstPreviewable ? URL.createObjectURL(firstPreviewable) : null;
-    browsePreviewUrlRef.current = nextPreviewUrl;
-    onLocalPreviewChange?.(nextPreviewUrl);
-    onPredictUiChange?.({ loading: false, error: null, data: null, items: [], currentIndex: 0 });
   };
 
   const handleBrowseClick = () => {
