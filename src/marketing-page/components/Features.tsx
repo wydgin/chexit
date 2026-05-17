@@ -26,6 +26,8 @@ import FlagOutlinedIcon from '@mui/icons-material/FlagOutlined';
 import ZoomInIcon from '@mui/icons-material/ZoomIn';
 import ZoomOutIcon from '@mui/icons-material/ZoomOut';
 import type { Theme } from '@mui/material/styles';
+import { useTheme } from '@mui/material/styles';
+import useMediaQuery from '@mui/material/useMediaQuery';
 import type { PredictUiState } from '../../api/chexit';
 import { fetchLatestUpload, type UploadRecord } from '../../api/chexit';
 
@@ -425,8 +427,10 @@ type ResultsOverviewGridProps = {
   assessmentCardRef: React.RefObject<HTMLDivElement | null>;
 };
 
-/** Owns contributions open state; matches image card min-height to expanded assessment card. */
+/** Owns contributions open state; matches image card min-height to expanded assessment card (wide layout only). */
 function ResultsOverviewGrid({ children, sx, assessmentCardRef }: ResultsOverviewGridProps) {
+  const theme = useTheme();
+  const isWideLayout = useMediaQuery(theme.breakpoints.up('lg'));
   const gridRef = React.useRef<HTMLDivElement>(null);
   const [open, setOpen] = React.useState(false);
   const clearStretchTimerRef = React.useRef<number | null>(null);
@@ -452,16 +456,24 @@ function ResultsOverviewGrid({ children, sx, assessmentCardRef }: ResultsOvervie
     if (!grid || !assessmentCard) return;
 
     const syncHeights = () => {
-      if (!open) return;
+      if (!open || !isWideLayout) {
+        clearStretch();
+        return;
+      }
       const height = Math.round(assessmentCard.getBoundingClientRect().height);
       if (height < 1) return;
       grid.setAttribute('data-stretch', '');
       grid.style.setProperty('--results-row-align-h', `${height}px`);
     };
 
-    if (!open) {
+    if (!open || !isWideLayout) {
       if (clearStretchTimerRef.current != null) {
         window.clearTimeout(clearStretchTimerRef.current);
+        clearStretchTimerRef.current = null;
+      }
+      if (!isWideLayout) {
+        clearStretch();
+        return;
       }
       clearStretchTimerRef.current = window.setTimeout(() => {
         clearStretch();
@@ -484,7 +496,7 @@ function ResultsOverviewGrid({ children, sx, assessmentCardRef }: ResultsOvervie
     const observer = new ResizeObserver(syncHeights);
     observer.observe(assessmentCard);
     return () => observer.disconnect();
-  }, [open, assessmentCardRef, clearStretch]);
+  }, [open, isWideLayout, assessmentCardRef, clearStretch]);
 
   const contextValue = React.useMemo(
     () => ({ open, setOpen, collapseStretchNow }),
@@ -987,7 +999,7 @@ export default function Features({
             },
             '&[data-stretch] .results-image-card': {
               boxSizing: 'border-box',
-              minHeight: 'var(--results-row-align-h)',
+              minHeight: { lg: 'var(--results-row-align-h)' },
             },
             '& .results-diagnosis-shell': {
               mb: 2.5,
