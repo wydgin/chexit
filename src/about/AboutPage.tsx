@@ -88,13 +88,13 @@ const AUTHORS: Person[] = [
     name: 'Ma. Regina Rosel Manlutac Galfo',
     role: 'Co-author · BS Computer Engineering',
     bio:
-      'Regina Galfo is a Parangal sa Mag-aaral Student Achiever awardee with specialized experience in ' +
-      'human-centered artificial intelligence, smart systems, and full-stack development. She has developed ' +
-      'a robust technical foundation through her work with the Smart Systems Laboratory and her success as ' +
-      'a champion of the MERALCO IDOL Hackathon 2025. She has gained significant professional exposure as a ' +
-      'software engineering consultant for a Canadian-based consultancy company, a student assistant for the ' +
-      'UP Diliman Office of the Vice Chancellor for Academic Affairs, and a cross-functional lead who managed ' +
-      'the operational automation and branding of an Australian company.',
+      'Regina Galfo is an aspiring software engineer with deep interest in full-stack development, smart ' +
+      'systems, and human-centered artificial intelligence. She has developed a strong aptitude for project ' +
+      'leadership and a robust technical foundation through her engagements as event lead across recognized ' +
+      'engineering organizations and her success as a champion of the Meralco IDOL Hackathon 2025 along with ' +
+      'Mark. She has gained significant professional exposure as a student assistant for the Office of the ' +
+      'Vice Chancellor for Academic Affairs, a cross-functional lead (branding & automation) for an Australian ' +
+      'company, and most recently, as a software consultant for a Canadian-based IT company.',
     initials: 'RG',
     photoSrc: '/assets/team/galfo.jpg',
   },
