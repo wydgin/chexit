@@ -30,6 +30,7 @@ import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import type { PredictUiState } from '../../api/chexit';
 import { fetchLatestUpload, type UploadRecord } from '../../api/chexit';
+import { findFlagNoteTypos, type FlagNoteTypo } from '../utils/flagNoteTypos';
 
 type FlagCategory = 'false-positive' | 'false-negative' | 'wrong-region' | 'image-quality' | 'other';
 
@@ -877,6 +878,8 @@ export default function Features({
   const [flagFormOpen, setFlagFormOpen] = React.useState(false);
   const [flagFormCategories, setFlagFormCategories] = React.useState<FlagCategory[]>([]);
   const [flagFormNote, setFlagFormNote] = React.useState('');
+  const [flagTypoDialogOpen, setFlagTypoDialogOpen] = React.useState(false);
+  const [flagTypoIssues, setFlagTypoIssues] = React.useState<FlagNoteTypo[]>([]);
   const [logOpen, setLogOpen] = React.useState(false);
   const currentFlag: AnomalyFlag | null = currentFlagKey ? (flags[currentFlagKey] ?? null) : null;
   const flagCount = Object.keys(flags).length;
@@ -884,6 +887,8 @@ export default function Features({
   /** Close the inline form whenever the user navigates to a different image. */
   React.useEffect(() => {
     setFlagFormOpen(false);
+    setFlagTypoDialogOpen(false);
+    setFlagTypoIssues([]);
   }, [currentFlagKey]);
 
   const openFlagForm = React.useCallback(() => {
@@ -905,6 +910,8 @@ export default function Features({
 
   const saveCurrentFlag = React.useCallback(() => {
     if (!currentFlagKey || !pred || flagFormCategories.length === 0) return;
+    setFlagTypoDialogOpen(false);
+    setFlagTypoIssues([]);
     /** Preserve the user-facing order of FLAG_CATEGORIES regardless of click order. */
     const orderedCategories = FLAG_CATEGORIES.map((c) => c.id).filter((id) =>
       flagFormCategories.includes(id),
@@ -937,6 +944,22 @@ export default function Features({
     riskPct,
     confidenceLine,
   ]);
+
+  const requestSaveCurrentFlag = React.useCallback(() => {
+    if (!currentFlagKey || !pred || flagFormCategories.length === 0) return;
+    const note = flagFormNote.trim();
+    if (!note) {
+      saveCurrentFlag();
+      return;
+    }
+    const issues = findFlagNoteTypos(note);
+    if (issues.length === 0) {
+      saveCurrentFlag();
+      return;
+    }
+    setFlagTypoIssues(issues);
+    setFlagTypoDialogOpen(true);
+  }, [currentFlagKey, pred, flagFormCategories.length, flagFormNote, saveCurrentFlag]);
 
   const removeFlag = React.useCallback(
     (key: string) => {
@@ -1321,6 +1344,8 @@ export default function Features({
               placeholder="Note (e.g., missed nodule on right apex)"
               value={flagFormNote}
               onChange={(e) => setFlagFormNote(e.target.value)}
+              spellCheck
+              inputProps={{ spellCheck: true }}
               sx={{
                 // The shared theme pins MuiOutlinedInput's root to a fixed height
                 // for `size: small`, which squeezes the multiline textarea against
@@ -1343,7 +1368,7 @@ export default function Features({
               <Button
                 size="small"
                 variant="contained"
-                onClick={saveCurrentFlag}
+                onClick={requestSaveCurrentFlag}
                 disabled={flagFormCategories.length === 0}
                 sx={(theme) => ({
                   // Keep the label visible when disabled — MUI's default disabled
@@ -1384,6 +1409,39 @@ export default function Features({
           </Box>
           </Box>
         </ResultsOverviewGrid>
+        <Dialog
+          open={flagTypoDialogOpen}
+          onClose={() => setFlagTypoDialogOpen(false)}
+          maxWidth="xs"
+          fullWidth
+        >
+          <DialogTitle>Possible typo in your note</DialogTitle>
+          <DialogContent>
+            <Typography variant="body2" sx={{ color: mutedText, mb: 1.5 }}>
+              Check these words before saving, or save anyway if the note is correct.
+            </Typography>
+            <Stack spacing={1}>
+              {flagTypoIssues.map((issue) => (
+                <Typography key={`${issue.word}-${issue.suggestion}`} variant="body2">
+                  <Box component="span" sx={{ fontWeight: 600 }}>
+                    {issue.word}
+                  </Box>
+                  {' — did you mean '}
+                  <Box component="span" sx={{ fontWeight: 600, fontStyle: 'italic' }}>
+                    {issue.suggestion}
+                  </Box>
+                  ?
+                </Typography>
+              ))}
+            </Stack>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2 }}>
+            <Button onClick={() => setFlagTypoDialogOpen(false)}>Edit note</Button>
+            <Button variant="contained" onClick={saveCurrentFlag}>
+              Save anyway
+            </Button>
+          </DialogActions>
+        </Dialog>
         <Dialog
           open={zoomOpen}
           onClose={closeZoom}
