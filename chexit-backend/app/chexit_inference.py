@@ -7,7 +7,7 @@ Chexit inference pipeline (single image):
 4. Per‑model preprocessing (mask → resize → head preprocess), then predictions
 5. Per‑model Score‑CAM, then ensemble‑weighted fusion of CAMs
 
-Single module for FastAPI — no mobilenetv2_prog dependency; paths resolve to repo ``assets/``.
+Single module for FastAPI — paths resolve to repo ``assets/`` (MobileNetV3Large backbone).
 """
 
 from __future__ import annotations
@@ -551,7 +551,7 @@ def get_densenet() -> tf.keras.Model:
     return _densenet_model
 
 
-# ----- Preprocessing & mask (from scorecam_mobnet.py) -----
+# ----- Preprocessing & mask -----
 
 
 def apply_clahe(
@@ -800,7 +800,7 @@ def lung_mask_from_unet(bgr_uint8: np.ndarray, unet: tf.keras.Model) -> np.ndarr
     return mask
 
 
-# ----- Score-CAM (from scorecam_mobnet.py) -----
+# ----- Score-CAM -----
 
 
 def get_target_conv_layer(
@@ -1215,7 +1215,7 @@ def predict_chexit_from_bgr(bgr_uint8: np.ndarray) -> Dict[str, Any]:
     risk_score = round(prob_tb * 100.0, 2)
     confidence_label = "High risk" if pred_label == 1 else "Low risk"
     model_contributions = {
-        "mobilenet-v2": round(w_m * 100.0, 2),
+        "mobilenet-v3-large": round(w_m * 100.0, 2),
         "efficientnet-b2": round(w_e * 100.0, 2),
         "densenet-121": round(w_d * 100.0, 2),
     }

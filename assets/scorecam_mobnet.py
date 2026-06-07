@@ -1,4 +1,15 @@
 """
+LEGACY — not used by the FastAPI API.
+
+Production inference and Score-CAM live in:
+  chexit-backend/app/chexit_inference.py
+  chexit-backend/app/explainability/
+
+This CLI script targeted the removed MobileNetV2 / mobilenetv2_prog workflow and is
+non-functional without that module. Kept for historical reference only.
+
+---
+
 Score-CAM for the Chexit MobileNet TB classifier (TensorFlow/Keras).
 
 Preprocessing matches mobilenetv2_prog.load_image_for_classifier (order matters):

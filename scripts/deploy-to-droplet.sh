@@ -7,7 +7,7 @@
 #
 set -euo pipefail
 
-DROPLET="${CHEXIT_DROPLET:-root@139.59.123.121}"
+DROPLET="${CHEXIT_DROPLET:-root@143.198.99.111}"
 REMOTE="/opt/chexit"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

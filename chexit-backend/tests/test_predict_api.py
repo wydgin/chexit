@@ -97,6 +97,11 @@ def test_predict_returns_contract(client: TestClient) -> None:
     assert isinstance(data["confidence_label"], str)
     assert isinstance(data["heatmap"], str)
     assert len(data["heatmap"]) > 500
+    contrib = data.get("model_contributions")
+    assert isinstance(contrib, dict)
+    assert "mobilenet-v3-large" in contrib
+    assert "efficientnet-b2" in contrib
+    assert "densenet-121" in contrib
 
 
 def test_predict_rejects_non_image(client: TestClient) -> None:

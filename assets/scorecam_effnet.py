@@ -1,4 +1,14 @@
 """
+LEGACY — not used by the FastAPI API.
+
+Production inference and Score-CAM live in:
+  chexit-backend/app/chexit_inference.py
+  chexit-backend/app/explainability/fast_scorecam.py
+
+Standalone CLI/dev tool for one-off EfficientNet Score-CAM runs. Safe to ignore for deployment.
+
+---
+
 EfficientNet Score-CAM for single-image TB diagnosis workflow.
 
 Web-app friendly:

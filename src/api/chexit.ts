@@ -1,5 +1,5 @@
 type ModelContributions = {
-  mobilenetv2: number;
+  mobilenetv3: number;
   efficientnetb2: number;
   densenet121: number;
 };
@@ -534,7 +534,7 @@ function normalizePredictResponse(raw: unknown): PredictResponse {
   if (mcRaw && typeof mcRaw === 'object') {
     const mc = mcRaw as Record<string, unknown>;
     model_contributions = {
-      mobilenetv2: pickContributionNum(mc, 'mobilenet-v2'),
+      mobilenetv3: pickContributionNum(mc, 'mobilenet-v3-large'),
       efficientnetb2: pickContributionNum(mc, 'efficientnet-b2'),
       densenet121: pickContributionNum(mc, 'densenet-121'),
     };

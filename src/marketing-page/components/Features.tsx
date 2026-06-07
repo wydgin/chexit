@@ -362,40 +362,21 @@ type FeaturesProps = {
   onNavigateIndex?: (nextIndex: number) => void;
 };
 
-// function contributionBars(riskScore: number) {
-//   const r = Math.min(100, Math.max(0, Math.round(riskScore)));
-//   return [
-//     { label: 'MobileNet-V2', value: Math.min(100, Math.round(r * 0.88)), barColor: '#6366f1' },
-//     { label: 'ResNet-50', value: Math.min(100, Math.round(r * 1.02)), barColor: '#3b82f6' },
-//     { label: 'DenseNet-121', value: r, barColor: '#22c55e' },
-//   ];
-// }
-
-// function contributionBars(_riskScore: number) {
-//   // Backend currently runs only MobileNetV2.
-//   // Keep other planned models visible but zeroed until backend supports them.
-//   return [
-//     { label: 'MobileNetV2', value: 100, barColor: '#6366f1' },
-//     { label: 'EfficientNetB2', value: 0, barColor: '#f59e0b' },
-//     { label: 'DenseNet121', value: 0, barColor: '#22c55e' },
-//   ];
-// }
-
 function contributionBars(contrib?: {
-  mobilenetv2: number;
+  mobilenetv3: number;
   efficientnetb2: number;
   densenet121: number;
 }) {
   if (!contrib) {
     return [
-      { label: 'MobileNetV2', value: 0, barColor: '#6366f1' },
+      { label: 'MobileNetV3', value: 0, barColor: '#6366f1' },
       { label: 'EfficientNetB2', value: 0, barColor: '#f59e0b' },
       { label: 'DenseNet121', value: 0, barColor: '#22c55e' },
     ];
   }
 
   return [
-    { label: 'MobileNetV2', value: Math.round(contrib.mobilenetv2), barColor: '#6366f1' },
+    { label: 'MobileNetV3', value: Math.round(contrib.mobilenetv3), barColor: '#6366f1' },
     { label: 'EfficientNetB2', value: Math.round(contrib.efficientnetb2), barColor: '#f59e0b' },
     { label: 'DenseNet121', value: Math.round(contrib.densenet121), barColor: '#22c55e' },
   ];
@@ -699,12 +680,6 @@ export default function Features({
     : 'no-analysis';
   const canGoPrev = hasBatch && safeIndex > 0;
   const canGoNext = hasBatch && safeIndex < predictUi.items.length - 1;
-  // const modelRows = pred && riskPct != null ? contributionBars(Number(pred.risk_score)) : [
-  //   { label: 'MobileNet-V2', value: 60, barColor: '#6366f1' },
-  //   { label: 'ResNet-50', value: 80, barColor: '#3b82f6' },
-  //   { label: 'DenseNet-121', value: 75, barColor: '#22c55e' },
-  // ];
-  // const modelRows = pred && riskPct != null
   const modelRows = contributionBars(pred?.model_contributions);
 
   const inputCardRef = React.useRef<HTMLDivElement>(null);

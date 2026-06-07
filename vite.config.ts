@@ -21,7 +21,7 @@ export default defineConfig({
     extensions: ['.tsx', '.ts', '.jsx', '.js', '.json'],
   },
   server: {
-    // Allow Cursor / tunnel hostnames that are not "localhost"
+    // Allow tunnel hostnames that are not "localhost"
     host: true,
     // Allow rotating ngrok free subdomains during local sharing
     allowedHosts: ['.ngrok-free.dev', '.ngrok-free.app'],
