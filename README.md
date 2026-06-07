@@ -1,6 +1,6 @@
 # Chexit
 
-**Chest X-ray Identification for Tuberculosis** — a clinical decision-support web app for TB screening using chest X-rays (CXRs). Upload a PNG, JPG, or DICOM study, get a TB probability score, risk label, per-model contributions, and an explainability heatmap.
+**Chexit (pronounced CHeckst It) - Chest X-ray Identification for Tuberculosis** is a clinical decision-support web app for TB screening using chest X-rays (CXRs). Upload a PNG, JPG, or DICOM study, get a TB probability score, risk label, per-model contributions, and an explainability heatmap.
 
 This project was developed as a research capstone at the **University of the Philippines Diliman · Electrical and Electronics Engineering Institute (EEEI)**.
 
