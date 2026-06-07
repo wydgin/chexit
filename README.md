@@ -1,6 +1,6 @@
 # Chexit
 
-**Chexit (pronounced CHeckst It) - Chest X-ray Identification for Tuberculosis** is a clinical decision-support web app for TB screening using chest X-rays (CXRs). Upload a PNG, JPG, or DICOM study, get a TB probability score, risk label, per-model contributions, and an explainability heatmap.
+**Chexit (pronounced Checks It) - Chest X-ray Identification for Tuberculosis** is a clinical decision-support web app for TB screening using chest X-rays (CXRs). Upload a PNG, JPG, or DICOM study, get a TB probability score, risk label, per-model contributions, and an explainability heatmap.
 
 This project was developed as a research capstone at the **University of the Philippines Diliman · Electrical and Electronics Engineering Institute (EEEI)**.
 
@@ -12,11 +12,11 @@ This project was developed as a research capstone at the **University of the Phi
 
 ## Features
 
-- **TB risk scoring** — ensemble of three CNN architectures (MobileNetV3, EfficientNet-B2, DenseNet-121)
-- **Explainable AI** — Score-CAM heatmaps overlaid on the original CXR resolution
+- **TB risk scoring** — ensemble of three CNN architectures (MobileNet-V3 Large, EfficientNet-B2, DenseNet-121)
+- **Explainable AI** — (Faster) Score-CAM heatmaps overlaid on the original CXR resolution
 - **Lung segmentation** — U-Net masks lungs before classification
-- **Batch analysis** — up to 5 images per session in the dashboard
-- **DICOM support** — `.dcm` / `.dicom` uploads in addition to standard images
+- **Sequential batch analysis** — up to 5 images per session in the dashboard
+- **DICOM support** — `.dcm` / `.dicom` uploads in addition to standard images (.jpg, .png)
 - **Dark / light mode** — MUI theme with shared design tokens
 
 ---
@@ -39,8 +39,6 @@ This project was developed as a research capstone at the **University of the Phi
 | Backend | Python 3.11, FastAPI, TensorFlow | `chexit-backend/` — deployed to `/opt/chexit` on a droplet |
 | Models | U-Net + ensemble weights | `assets/` (~1 GB; large `.keras`/`.h5` files are gitignored) |
 | Optional | Firebase (Firestore, Storage, Analytics) | `src/firebase.ts` |
-
-**Important:** `/predict` can run for several minutes (Score-CAM on CPU). Production builds call `https://api.chexit.app` directly from the browser. Do **not** route long inference through Vercel `/api` rewrites — edge proxies time out in seconds to ~1 minute.
 
 ---
 
@@ -77,7 +75,7 @@ chexit/
 
 - **Node.js** 18+ and npm
 - **Python 3.11** (see `chexit-backend/.python-version`)
-- **~1 GB disk** for `assets/` model weights (U-Net may auto-download from Google Drive on first API start)
+- **~1 GB disk** for `assets/` model weights (U-Net)
 
 ---
 
